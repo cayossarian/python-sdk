@@ -43,11 +43,11 @@ import os
 import time
 from enum import Enum
 # Workaround due to non-support of StrEnum in current Gen2 FW Python, StrEnum available in enum, remove
-from spancommon.strenum import StrEnum
+from strenum import StrEnum
 from functools import partial
-from deprecated import deprecated
+# from deprecated import deprecated
 from typing import Any, Callable, List, Optional, Union
-from spancommon.mqtt import MqttClient
+from mqtt import MqttClient
 
 
 # eBus MQTT topic constants
@@ -236,14 +236,6 @@ class Property:
         self._device = device
         self.async_loop = async_loop
 
-    @staticmethod
-    @deprecated
-    def from_dict(property_dict: dict) -> Property:
-        """
-        Deprecated, use Property(from_dict = some_dict)
-        """
-        return Property(from_dict=property_dict)
-
     def set_node(self, node: Node) -> None:
         self._node = node
 
@@ -252,13 +244,6 @@ class Property:
         Returns Node containing Property
         """
         return self._node
-
-    @deprecated
-    def get_node(self) -> Node:
-        """
-        Deprecated, use node()
-        """
-        return self.node()
 
     def get_node_id(self) -> str:
         """
@@ -297,13 +282,6 @@ class Property:
         self._value = value
         return self.publish_value()
 
-    @deprecated
-    def set(self, value: Any) -> bool:
-        """
-        Deprecated, call set_value() instead!
-        """
-        return self.set_value(value)
-
     def round(self) -> Optional[int]:
         """
         Returns the property's round attribute
@@ -329,14 +307,6 @@ class Property:
         """
         return self._format
 
-    @deprecated
-    def get(self) -> Any:
-        """
-        Deprecated, user value()
-        Returns the property's value, potentially rounded
-        """
-        return self.value()
-
     def coerced_value(self) -> str:
         """
         Returns the property's value (potentially rounded), as a string
@@ -350,25 +320,11 @@ class Property:
         else:
             return property_value
 
-    @deprecated
-    def get_coerced_value(self) -> str:
-        """
-        Deprecated, use coerced_value()
-        """
-        return self.coerced_value()
-
     def id(self) -> str:
         """
         Returns the property's id
         """
         return self._id
-
-    @deprecated
-    def get_id(self) -> str:
-        """
-        Deprecated, user id()
-        """
-        return self.id()
 
     def datatype(self) -> str:
         """
@@ -378,18 +334,11 @@ class Property:
         logging.debug(f'reason=getDatatype,datatype={datatype}')
         return datatype
 
-    @deprecated
-    def get_datatype(self) -> str:
-        """
-        Deprecated, use datatype()
-        """
-        return self.datatype()
-
     def get_mqtt_client(self) -> MqttClient:
         """
         Who calls this function, and why?
         """
-        node = self.get_node()
+        node = self.node()
         if not node:
             logging.warning(f'reason=propertyGetMqttClientNoNode,propertyID={self._id}')
             return None
@@ -415,22 +364,8 @@ class Property:
     def settable(self) -> bool:
         return self._settable
 
-    @deprecated
-    def is_settable(self) -> bool:
-        """
-        Deprecated, use settable()
-        """
-        return self.settable()
-
     def retained(self) -> bool:
         return self._retained
-
-    @deprecated
-    def is_retained(self) -> bool:
-        """
-        Deprecated, use retained()
-        """
-        return self.retained()
 
     def is_json_datatype(self) -> bool:
         return self._datatype == PropertyDatatype.JSON
@@ -470,7 +405,7 @@ class Property:
             logging.debug(f'reason=propertyPublishValueIsNone,deviceID={device_id},nodeID={node_id},propertyID={self._id}')
             return False
         try:
-            value = self.get_coerced_value()
+            value = self.coerced_value()
             logging.debug(f'reason=propertyPublishValue,value={value},topic={topic},retained={self.retained()}')
             mqttc.publish(topic, value, retain=self.retained(), qos=EBUS_HOMIE_MQTT_QOS)
             return True
@@ -619,13 +554,6 @@ class Node:
         """
         return self._id
 
-    @deprecated
-    def get_id(self) -> str:
-        """
-        Deprecated, use id()
-        """
-        return self.id()
-
     def get_device_id(self) -> str:
         """
         Why is this a thing?
@@ -635,18 +563,11 @@ class Node:
     def device(self) -> Device:
         return self._device
 
-    @deprecated
-    def get_device(self) -> Device:
-        """
-        Deprecated, use device()
-        """
-        return self.device()
-
     def set_device(self, device: Device) -> None:
         self._device = device
 
     def get_mqtt_client(self) -> MqttClient:
-        device = self.get_device()
+        device = self.device()
         if not device:
             logging.warning(f'reason=nodeGetMqttClientNoDevice,nodeID={self._id}')
             return None
@@ -655,21 +576,11 @@ class Node:
             logging.warning(f'reason=nodeGetMqttClientNoMqttClient,nodeID={self._id}')
         return mqttc
 
-    @deprecated
-    def new_property(self, id: str = None, name: Optional[str] = None) -> Property:
-        """
-        Deprecated, the main use was to get a property you could add_property_from_dict with
-        Returns a new Property, with device and node set
-        """
-        if not name:
-            name = id
-        return Property(id=id, name=name, device=self.device(), node=self)
-
     def add_property(self, property: Property) -> Property:
         """
         Adds the property to properties, and returns property
         """
-        if not property.get_node():
+        if not property.node():
             property.set_node(self)
         # Note set_subscribe() checks if property is settable...
         property.set_subscribe()
@@ -791,10 +702,6 @@ class Device:
         """
         return self._id
 
-    @deprecated
-    def get_id(self) -> str:
-        return self.id()
-
     def get_mqtt_client(self) -> MqttClient:
         mqttc = self.mqttc
         if not mqttc:
@@ -903,9 +810,9 @@ class Device:
         """
         Add node to nodes
         """
-        if not node.get_device():
+        if not node.device():
             node.set_device(self)
-        node_id = node.get_id()
+        node_id = node.id()
         self._nodes.update({node_id: node})
         node.publish()
         self.update_description()
