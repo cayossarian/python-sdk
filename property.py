@@ -1,5 +1,5 @@
 import uuid
-import logging # TODO FIXME?
+import logging
 from threading import Lock
 from typing import List, Callable, Union, Optional, Any, Type
 
@@ -19,29 +19,30 @@ class PythonProperty():
     "format" is stolen vertbatim from Homie, used here most often to provide clients with the list of possible ENUM values,
       which is valuable/useful because often the client doesn't have access to the enum itself (due to scoping)
     All methods/operations are intended to be thread-safe, please file an issue if you beleive otherwise
-    FUTURE/TODO:
-      Should callback should be called with the PythonProperty, not its value?
-      Should callback be called even if the PythonProperty's value doesn’t change when set?
     """
     def __init__(self,
                  id: Optional[str] = None,
                  value: Any = None,
                  type: Union[Type, str, None] = None,
                  format: Optional[str] = None,
+                 entity_setter: Optional[Callable] = None,
                  from_dict: dict = {}):
         self._lock = Lock()
         self._change_callbacks = {}
         self._set_callbacks = {}
+        self._entity_setter = None
         if not from_dict:
             self._id = id
             self._value = value
             self._type = type
             self._format = format
+            self._entity_setter = entity_setter
         else:
             self._id = from_dict.get('id')
             self._value = from_dict.get('value', None)
             self._type = from_dict.get('type', None)
             self._format = from_dict.get('format', None)
+            self._entity_setter = from_dict.get('entity_setter', None)
         if not self._id:
             # Specifying the id is required!
             logging.warning(f'reason=pythonPropertyInitNoIdSpecified!')
@@ -130,16 +131,43 @@ class PythonProperty():
             try:
                 callback(self)
             except Exception as e:
-                logging.warning(f'reason=setValueException,propertyId={self._id},callbackId={callback_id}')
+                logging.warning(f'reason=setValueOnSetCallbackException,propertyId={self._id},newValue={new_value},callbackId={callback_id}')
         # Do we need to invoke on_change callbacks?
         if new_value != old_value:
             for callback_id, callback in on_change_callback_items:
                 try:
                     callback(self)
                 except Exception as e:
-                    logging.warning(f'reason=setValueException,propertyId={self._id},callbackId={callback_id}')
+                    logging.warning(f'reason=setValueOnChangeCallbackException,propertyId={self._id},newValue={new_value},callbackId={callback_id}')
         return new_value
 
+    def set_entity(self, new_value: Any) -> Any:
+        """
+        Used by client(s) to set the state of the entity the property represents,
+        which is done by the property invoking a registered set_entity_callback function
+        Presumably changing the entity state will eventually result in the property's state being set/changed,
+        which will then invoke any on_set and/or in_change callbacks
+        Returns the new value
+        """
+        if self._entity_setter:
+            logging.info(f'reason=setEntity,propertyId={self._id},new_value={new_value}')
+            try:
+                self._entity_setter(new_value)
+            except Exception as e:
+                logging.warning(f'reason=setEntityException,propertyId={self._id},new_value={new_value},e={e}')
+        else:
+            logging.warning(f'reason=setEntityNoSetter,propertyId={self._id}')
+        return new_value
+
+    def set_entity_setter(self, entity_setter: Callable) -> None:
+        """
+        Registers an entity_setter function for the property
+        """
+        with self._lock:
+            self._entity_setter = entity_setter
+
+    def as_dict(self) -> dict:
+        return vars(self)
 
 class GroupedPropertyDict():
     """
@@ -259,10 +287,38 @@ class GroupedPropertyDict():
         if not this_property:
             # groups() is thread-safe for GroupedPropertyDict
             if group not in self.groups():
-                logging.warning(f'reason=groupedPropertiesSetNoGroupByThatName,group={group},id={id},value={value}')
+                logging.warning(f'reason=groupedPropertiesSetValueNoGroupByThatName,group={group},id={id},value={value}')
             else:
-                logging.warning(f'reason=groupedPropertiesSetNoPythonPropertyByThatId,group={group},id={id},value={value}')
+                logging.warning(f'reason=groupedPropertiesSetValueNoPythonPropertyByThatId,group={group},id={id},value={value}')
         return this_property.set_value(value)
+
+    def set_entity(self, group: str, id: str, value: Any) -> Any:
+        """
+        Calls the entity_setter of the PythonProperty group.id
+        Returns the new value
+        """
+        # TODO change .info to .debug
+        logging.info(f'reason=groupedProperties,group={group},id={id},value={value}')
+        # get() is thread-safe for the GroupedPropertyDict, and set_entity() is thread-safe for PythonProperty?
+        this_property = self.get(group, id)
+        if not this_property:
+            # groups() is thread-safe for GroupedPropertyDict
+            if group not in self.groups():
+                logging.warning(f'reason=groupedPropertiesSetEntityNoGroupByThatName,group={group},id={id},value={value}')
+            else:
+                logging.warning(f'reason=groupedPropertiesSetEntityNoPythonPropertyByThatId,group={group},id={id},value={value}')
+        return this_property.set_entity(value)
+
+    def set_entity_setter(self, group: str, id: str, callback: Callable) -> None:
+        """
+        Sets entity_setter on the PythonProperty group.id
+        """
+        # get() is thread-safe for the GroupedPropertyDict, and set_entity_setter() is thread-safe for PythonProperty?
+        this_property = self.get(group, id)
+        if not this_property:
+            logging.warning(f'reason=groupedPropertiesSetEntitySetterNoPropertyByThatId,group={group},id={id}')
+            return None
+        return this_property.set_entity_setter(callback)
 
     def groups(self) -> List:
         """
@@ -277,6 +333,15 @@ class GroupedPropertyDict():
         """
         with self._lock:
             return self._properties[group].items()
+
+    def as_dict(self) -> dict:
+        returned_dict = {}
+        for group in self.groups():
+            group_dict = {}
+            for id, property in self.items(group):
+                group_dict.update({id:  property.as_dict()})
+            returned_dict.update({group: group_dict})
+        return returned_dict
 
 
 class PropertyDict():

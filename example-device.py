@@ -18,6 +18,8 @@ from enum import Enum
 # Workaround due to non-support of StrEnum in current Gen2 FW Python, StrEnum available in enum, remove
 from mqtt import MqttClient
 from property import PythonProperty, GroupedPropertyDict
+# TODO debug only, remove
+from pprint import pp, pformat
 
 
 class ExampleDevice():
@@ -61,6 +63,9 @@ class ExampleDevice():
         """
         return self._props.add_property_on_change_callback(group, id, callback)
 
+    def as_dict(self) -> dict:
+        return self._props.as_dict()
+
 
 def set_homie_property_from_python_property(homie_property: homie.Property,
                                             python_property: PythonProperty) -> bool:
@@ -92,6 +97,9 @@ class ExampleDeviceAdapter():
         # End of logger setup
         self._example_device = example_device
         self.create_device_and_nodes()
+
+    def as_dict(self) -> dict:
+        return self._example_device.as_dict()
 
     @staticmethod
     def ebus_broker_cfg() -> Dict:
@@ -193,7 +201,9 @@ def main():
     example_device_adapter_logger.setLevel(logging.INFO)
 
     example_device = ExampleDevice(logger=example_device_logger)
+    example_device_logger.info(f'\n{pformat(example_device.as_dict())}')
     example_device_adapter = ExampleDeviceAdapter(example_device, logger=example_device_adapter_logger)
+    example_device_adapter_logger.info(f'\n{pformat(example_device_adapter.as_dict())}')
     # Wait forever for event that will never come
     event = threading.Event()
     event.wait()
