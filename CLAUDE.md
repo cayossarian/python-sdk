@@ -1,0 +1,167 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+This is a Python SDK implementing the Homie MQTT Convention (version 5) for eBus IoT devices. The SDK provides a framework for representing devices, nodes, and properties over MQTT, following the eBus MQTT Convention (https://github.com/spanio/eBus-MQTT-Convention).
+
+## Core Architecture
+
+### Three-Layer Property System
+
+The codebase implements a sophisticated three-layer property abstraction:
+
+1. **PythonProperty** (`property.py`): A lightweight property wrapper with callbacks
+   - Thread-safe property value storage with change detection
+   - Supports on_change and on_set callbacks
+   - Can have an optional `entity_setter` for bidirectional control
+
+2. **GroupedPropertyDict** (`property.py`): Collection manager for organizing properties
+   - Two-level dictionary: `groups -> property_id -> PythonProperty`
+   - Thread-safe operations with observer pattern for bulk updates
+   - Use `bulk_update()` context manager for efficient batch operations
+
+3. **Homie Property** (`homie.py`): MQTT-enabled properties following Homie convention
+   - Maps to `ebus/5/{device_id}/{node_id}/{property_id}` topics
+   - Supports settable properties via `/set` topics
+   - Handles retained messages and QoS levels
+
+### Device Hierarchy
+
+```
+Device (homie.py)
+├── MQTT connection (MqttClient from mqtt.py)
+├── State management (DeviceState: init, ready, disconnected, sleeping, lost)
+├── $description attribute (JSON schema published on state transitions)
+└── Nodes
+    └── Properties
+        ├── Value publication to MQTT
+        └── Subscription to /set topics (if settable)
+```
+
+### Adapter Pattern
+
+The `example-device.py` demonstrates the recommended adapter pattern:
+- **ExampleDevice**: Application-level device using PythonProperty/GroupedPropertyDict
+- **ExampleDeviceAdapter**: Bridges application properties to Homie/MQTT
+- Connect changes via `add_property_on_change_callback()` with `partial(set_homie_property_from_python_property, homie_property)`
+
+## Key Design Patterns
+
+### Property Synchronization
+Properties are synchronized from application to MQTT using callbacks:
+```python
+homie_property = homie_node.add_property_from_dict(property_dict)
+example_device.add_property_on_change_callback(
+    group, py_property_id,
+    partial(set_homie_property_from_python_property, homie_property))
+```
+
+### State Transitions
+When modifying device structure (adding/removing nodes or properties):
+1. Set device state to `DeviceState.INIT`
+2. Make changes and publish new `$description`
+3. Set device state to `DeviceState.READY`
+
+Use convenience methods: `begin_state_transition()` and `end_state_transition()`
+
+### MQTT Topic Retention
+- Properties track `_ever_published` flag to avoid creating phantom topics
+- Use `clear_value()` to properly remove retained topics
+- `delete_all_from_mqtt()` cleans up entire device state on shutdown
+
+### Reconnection Handling
+- Device publishes Last Will and Testament (LWT) as `DeviceState.LOST`
+- `on_connect` callback republishes device state and all property values
+- MQTT reconnection delay: 1-30 seconds with exponential backoff
+
+## Configuration
+
+### MQTT Broker Configuration
+Broker configuration is loaded from JSON file specified by `EBUS_BROKER_CFG` environment variable (defaults to `broker-cfg.json`):
+
+```json
+{
+  "host": "mqtt.example.com",
+  "port": 1883,
+  "authentication": {
+    "type": "USER_PASS",
+    "username": "myuser",
+    "password": "secret"
+  }
+}
+```
+
+### Environment Variables
+- `EBUS_BROKER_CFG`: Path to broker configuration JSON file
+- `EBUS_HOMIE_MQTT_QOS_SITE`: Override default MQTT QoS (default: 2)
+- `PUBLIC_MQTT_ENDPOINT`: Default broker endpoint (default: 127.0.0.1)
+- `PUBLIC_MQTT_PORT`: Default broker port (default: 1885)
+
+## Running the Example
+
+```bash
+# Run the example device adapter
+python3 example-device.py
+```
+
+The example creates:
+- A Homie device with ID `33A3D78A3D78`
+- An "environment" node with temperature, air-pressure, and humidity properties
+- MQTT topics published to `ebus/5/{device_id}/...`
+
+## Important Implementation Notes
+
+### Thread Safety
+All property operations are designed to be thread-safe:
+- PythonProperty uses `threading.Lock()` for value mutations
+- GroupedPropertyDict locks during group/property access
+- MQTT client runs in separate thread via `loop_start()`
+
+### Property Value Publishing
+Properties only publish to MQTT when:
+1. Value is not None, OR
+2. Property has been previously published (`_ever_published == True`)
+3. `skip_initial_publish` flag is not set
+
+This prevents creating empty retained topics in the broker.
+
+### Settable Properties
+For properties that can be set remotely:
+- Set `settable=True` in property definition
+- Provide `set_callback` function with signature: `callback(payload) -> None`
+- Property automatically subscribes to `{topic}/set`
+- For async callbacks, pass `async_loop` parameter
+
+### Child Devices
+Child devices must specify both `root_id` and `parent_id`. The implementation notes that child devices likely need to share the MQTT connection with the root device (currently not fully implemented).
+
+## Known Limitations & TODOs
+
+From the codebase comments:
+- Thread-safety improvements needed throughout
+- Child device support incomplete (SAS-3547)
+- `$target` attribute not fully implemented for settable properties
+- Empty string value encoding (0x00 byte) not implemented
+- Graceful node/property removal needs improvement
+
+## File Organization
+
+- `homie.py`: Core Homie convention implementation (Device, Node, Property classes)
+- `property.py`: Application-level property abstractions (PythonProperty, GroupedPropertyDict)
+- `mqtt.py`: MQTT client wrapper around paho-mqtt
+- `example-device.py`: Reference implementation showing adapter pattern
+- `strenum.py`: Workaround for StrEnum compatibility with older Python versions
+- `broker-cfg.json`: MQTT broker connection configuration
+- `OLD/`: Previous iterations of implementation files
+
+## Homie Convention Specifics
+
+- MQTT topic structure: `ebus/5/{device_id}/{node_id}/{property_id}`
+- Special topics:
+  - `{base}/$state`: Device state (init, ready, disconnected, sleeping, lost)
+  - `{base}/$description`: JSON schema of device/nodes/properties
+  - `{base}/{node}/{property}/set`: Topic for settable properties
+- Retained messages used for device state and property values
+- QoS level configurable via environment (default: 2)
