@@ -1,0 +1,8 @@
+{
+    "host": "192.168.128.175",
+    "port": 1883,
+    "homie_domains": ["ebus"],
+    "authentication": {"type": "USER_PASS",
+                       "username": "dcj"
+                       "password": "dcj1mqtt"}
+}
