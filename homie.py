@@ -239,6 +239,11 @@ class Property:
         self._node = node
         self._device = device
         self.async_loop = async_loop
+        # Track whether this property has ever been published (FIX for MQTT topic persistence)
+        self._ever_published = False
+        self._initial_value_was_none = (value is None)
+        # Check for skip_initial_publish flag from dict
+        self._skip_initial_publish = from_dict.get('skip_initial_publish', False) if from_dict else False
 
     def as_dict(self) -> dict:
         return {'id': self.id(),
@@ -418,6 +423,10 @@ class Property:
         if not (device_id and node_id):
             logger.warning(f'propertyPublishValueInsufficientIDs,deviceID={device_id},nodeID={node_id},propertyID={self._id}')
             return False
+        # FIX: Don't publish if value is None and we've never published before or skip flag is set
+        if self._value is None and (not self._ever_published or self._skip_initial_publish):
+            logger.debug(f'reason=propertySkipPublishNoneValue,propertyID={self._id}')
+            return True
         topic = f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}'
         if self._value is None:
             logger.debug(f'reason=propertyPublishValueIsNone,deviceID={device_id},nodeID={node_id},propertyID={self._id}')
@@ -426,10 +435,51 @@ class Property:
             value = self.coerced_value()
             logger.debug(f'reason=propertyPublishValue,value={value},topic={topic},retained={self.retained()}')
             mqttc.publish(topic, value, retain=self.retained(), qos=EBUS_HOMIE_MQTT_QOS)
+            self._ever_published = True  # FIX: Mark as published
+            self._skip_initial_publish = False  # FIX: Clear skip flag after first publish
             return True
         except Exception as e:
             logger.warning(f'reason=propertyPublishValuePublishException,e={e}')
             return False
+
+    def clear_value(self) -> bool:
+        """
+        Clear the property's value by publishing null/empty to its topic
+        Returns True on success, else False
+        """
+        # FIX: Don't clear if we never published a value
+        # This prevents creating phantom topics during cleanup
+        if not self._ever_published:
+            logger.info(f'reason=propertySkipClearNeverPublished,propertyID={self._id}')
+            return True
+
+        mqttc = self.get_mqtt_client()
+        if not mqttc or not mqttc.is_running:
+            logger.warning(f'reason=propertyClearValueNoMqttClient,propertyID={self._id}')
+            return False
+        node_id = self.get_node_id()
+        device_id = self.get_device_id()
+        if not (device_id and node_id):
+            logger.warning(f'reason=propertyClearValueInsufficientIDs,deviceID={device_id},nodeID={node_id},propertyID={self._id}')
+            return False
+        topic = f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}'
+        try:
+            # Publishing empty string clears retained message
+            mqttc.publish(topic, '', retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+            logger.info(f'reason=propertyClearedValue,propertyID={self._id},topic={topic}')
+            self._ever_published = False  # FIX: Reset the flag
+            return True
+        except Exception as e:
+            logger.warning(f'reason=propertyClearValueException,propertyID={self._id},topic={topic},exception={e}')
+            return False
+
+    def was_ever_published(self) -> bool:
+        """Return whether this property has ever been published to MQTT (FIX for MQTT topic persistence)"""
+        return self._ever_published
+
+    def get_last_published_value(self) -> Any:
+        """Return the last published value (currently just returns current value)"""
+        return self.value()
 
     def description(self) -> dict:
         """
@@ -643,6 +693,52 @@ class Node:
         """
         return self._properties
 
+    def get_properties(self) -> dict:
+        """
+        Returns dict of Node's properties keyed by propertyID
+        """
+        return self.properties()
+
+    def get_property(self, property_id: str) -> Optional[Property]:
+        """Safe getter for a property"""
+        return self._properties.get(property_id, None)
+
+    def delete_property(self, property_id: str) -> bool:
+        """
+        Remove property and clear its MQTT topic
+        Returns True if removed, False if not found
+        """
+        if property_id not in self._properties:
+            logger.warning(f'reason=nodeDeletePropertyNotFound,nodeId={self._id},propertyId={property_id}')
+            return False
+        property = self._properties[property_id]
+        property.clear_value()
+        del self._properties[property_id]
+        logger.info(f'reason=nodeDeletedProperty,nodeId={self._id},propertyId={property_id}')
+        return True
+
+    def clear_all_properties(self) -> None:
+        """Remove all properties (for node deletion)"""
+        # FIX: Track which properties were cleared vs skipped
+        cleared_count = 0
+        skipped_count = 0
+
+        for property_id, property in list(self._properties.items()):
+            # FIX: Only clear properties that were actually published
+            if hasattr(property, 'was_ever_published') and property.was_ever_published():
+                property.clear_value()
+                cleared_count += 1
+            elif hasattr(property, '_ever_published') and property._ever_published:
+                property.clear_value()
+                cleared_count += 1
+            else:
+                skipped_count += 1
+
+        self._properties.clear()
+        # FIX: Enhanced logging with counts
+        logger.info(f'reason=nodeClearedAllProperties,nodeId={self._id},cleared={cleared_count},skipped={skipped_count}')
+
+
     def description(self) -> dict:
         """
         Returns dict representing the Node's $description attribute
@@ -653,8 +749,8 @@ class Node:
         description['name'] = self._name
         description['type'] = self._type
         properties = dict()
-        for property_id, attributes in self.properties().items():
-            logger.info(f'reason=nodeDescriptionProperty,id={property_id}')
+        properties_snapshot = dict(self._properties)
+        for property_id, attributes in properties_snapshot.items():
             properties[property_id] = attributes.description()
         description['properties'] = properties
         return description
@@ -663,7 +759,11 @@ class Node:
         """
         Publishes Node, specifically its Properties to MQTT
         """
-        for property in self._properties.values():
+        node_id = self.id()
+        property_count = len(self._properties)
+        logger.debug(f'reason=nodePublish,nodeId={node_id},propertyCount={property_count}')
+        for property_id, property in self._properties.items():
+            logger.debug(f'reason=nodePublishProperty,nodeId={node_id},propertyId={property_id}')
             property.publish_value()
 
 
@@ -825,7 +925,8 @@ class Device:
         description['type'] = self._type
         description['name'] = self._name
         nodes_descriptions = dict()
-        for node_id, node in self._nodes.items():
+        nodes_snapshot = dict(self._nodes)
+        for node_id, node in nodes_snapshot.items():
             nodes_descriptions[node_id] = node.description()
         description['nodes'] = nodes_descriptions
         description['children'] = self._children_ids
@@ -916,6 +1017,10 @@ class Device:
         """
         return self.add_node(Node(from_dict=node_dict))
 
+    def get_node(self, node_id: str) -> Optional[Node]:
+        """Safe getter that returns None if node doesn't exist"""
+        return self._nodes.get(node_id, None)
+
     def remove_node(self, node_id: str) -> bool:
         """
         Removes node with node_id from nodes, if it exists
@@ -927,6 +1032,105 @@ class Device:
             return True
         else:
             return False
+
+    def delete_node(self, node_id: str) -> bool:
+        """
+        Remove node from device, clear all node topics, and update description
+        Returns True if removed, False if not found
+        """
+        if node_id not in self._nodes:
+            logger.warning(f'reason=deviceDeleteNodeNotFound,deviceId={self._id},nodeId={node_id}')
+            return False
+        node = self._nodes[node_id]
+        # Clear all property topics first
+        # Note: This explicitly clears each property's retained message from MQTT
+        # to avoid leaving orphaned topics in the broker
+        node.clear_all_properties()
+        # Remove node from device's internal structure
+        del self._nodes[node_id]
+        # Update device description (which removes the node from the schema)
+        self.publish_description()
+        logger.info(f'reason=deviceDeletedNode,deviceId={self._id},nodeId={node_id}')
+        return True
+
+    def delete_all_from_mqtt(self) -> None:
+        """
+        Delete entire device from MQTT broker: all nodes, properties, and description.
+        Used for clean shutdown. Does NOT republish anything, does NOT publish node descriptions.
+        """
+        logger.info(f'reason=deviceDeleteAllFromMqtt,deviceId={self._id}')
+
+        if not self.mqttc:
+            logger.warning(f'reason=deviceDeleteAllFromMqttNoMqttClient,deviceId={self._id}')
+            return
+
+        base_topic = f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}'
+
+        # Step 1: Clear all property values that were actually published
+        for node_id, node in list(self._nodes.items()):
+            if hasattr(node, '_properties'):
+                for prop_id, prop in list(node._properties.items()):
+                    # Only clear if property was ever published
+                    was_published = False
+                    if hasattr(prop, 'was_ever_published') and prop.was_ever_published():
+                        was_published = True
+                    elif hasattr(prop, '_ever_published') and prop._ever_published:
+                        was_published = True
+
+                    if was_published:
+                        prop_topic = f'{base_topic}/{node_id}/{prop_id}'
+                        try:
+                            self.mqttc.publish(prop_topic, '', retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+                            logger.debug(f'reason=deviceClearedProperty...')
+                        except Exception as e:
+                            logger.warning(f'reason=deviceClearPropertyFailed...')
+
+        # Step 2: Clear the main device $description (this removes all nodes from schema)
+        description_topic = f'{base_topic}/$description'
+        try:
+            self.mqttc.publish(description_topic, '', retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+            logger.info(f'reason=deviceClearedDescription,deviceId={self._id},topic={description_topic}')
+        except Exception as e:
+            logger.warning(f'reason=deviceClearDescriptionFailed,deviceId={self._id},error={e}')
+
+        # Step 3: Clear internal tracking (no publishing happens here)
+        self._nodes.clear()
+
+        logger.info(f'reason=deviceDeleteAllFromMqttComplete,deviceId={self._id}')
+
+    def clear_retained_topic(self, topic_path: str) -> bool:
+        """
+        Publish empty string to clear retained message on topic
+        Returns True on success, False on failure
+        """
+        if not self.mqttc:
+            logger.warning(f'reason=deviceClearTopicNoMqttClient,topic={topic_path}')
+            return False
+        try:
+            self.mqttc.publish(topic_path, '', retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+            logger.info(f'reason=deviceClearedTopic,topic={topic_path}')
+            return True
+        except Exception as e:
+            logger.warning(f'reason=deviceClearTopicException,topic={topic_path},e={e}')
+            return False
+
+    def begin_state_transition(self) -> None:
+        """Set device state to INIT to begin a state transition"""
+        logger.info(f'reason=deviceBeginStateTransition,deviceId={self._id}')
+        self.set_state(DeviceState.INIT)
+
+    def end_state_transition(self) -> None:
+        """Set device state to READY and publish updated description"""
+        logger.info(f'reason=deviceEndStateTransition,deviceId={self._id}')
+        self.publish_description()
+        self.set_state(DeviceState.READY)
+
+    def refresh_all_nodes(self) -> None:
+        """Republish entire device state (for reconnection)"""
+        logger.info(f'reason=deviceRefreshAllNodes,deviceId={self._id},nodeCount={len(self._nodes)}')
+        self.publish_description()
+        self.publish_nodes()
+        self.publish_state()
 
     def publish(self, attribute: str = '', value: Optional[Any] = None) -> None:
         """
@@ -1009,7 +1213,12 @@ class Device:
         logger.info(f'reason=deviceOnConnectInvocation,initialBrokerConnection={self.initial_broker_connection}')
         if self.initial_broker_connection:
             self.initial_broker_connection = False
+            # Also publish nodes on initial connection, FIX for G3P-19041
+            self.publish_nodes()
         else:
+            logger.info(f'reason=deviceRepublishingAfterReconnect,nodeCount={len(self._nodes)}')
+            for node_id in self._nodes.keys():
+                logger.debug(f'reason=deviceRepublishingNode,nodeId={node_id}')
             self.publish_description(republish=True)
             self.publish_nodes()
             self.publish_state()

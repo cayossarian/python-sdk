@@ -1,7 +1,18 @@
 import uuid
 import logging
+import re
+from enum import Enum
 from threading import Lock
-from typing import List, Callable, Union, Optional, Any, Type
+from typing import List, Callable, Union, Optional, Any, Type, Dict
+
+class ChangeEvent(Enum):
+    """Events fired by GroupedPropertyDict"""
+    GROUP_CREATED = 'group_created'
+    GROUP_DELETED = 'group_deleted'
+    PROPERTY_ADDED = 'property_added'
+    PROPERTY_REMOVED = 'property_removed'
+    PROPERTY_CHANGED = 'property_changed'
+    BULK_UPDATE = 'bulk_update'
 
 class PythonProperty():
     """
@@ -105,10 +116,10 @@ class PythonProperty():
         """
         with self._lock:
             if callback_id in self._change_callbacks:
-                self._change_callbacks.pop(calback_id, None)
+                self._change_callbacks.pop(callback_id, None)
                 return True
             elif callback_id in self._set_callbacks:
-                self._set_callbacks.pop(calback_id, None)
+                self._set_callbacks.pop(callback_id, None)
                 return True
             else:
                 logging.warning(f'removeCallbackNoSuchId,callbackId={callback_id},propertyId={self._id}')
@@ -131,7 +142,7 @@ class PythonProperty():
             try:
                 callback(self)
             except Exception as e:
-                logging.warning(f'reason=setValueOnSetCallbackException,propertyId={self._id},newValue={new_value},callbackId={callback_id}')
+                logging.warning(f'reason=setValueOnSetCallbackException,propertyId={self._id},newValue={new_value},callbackId={callback_id},e={e}')
         # Do we need to invoke on_change callbacks?
         if new_value != old_value:
             for callback_id, callback in on_change_callback_items:
@@ -169,6 +180,35 @@ class PythonProperty():
     def as_dict(self) -> dict:
         return vars(self)
 
+class BulkUpdateContext:
+    """Context manager for bulk updates to GroupedPropertyDict"""
+    def __init__(self, grouped_dict):
+        self.grouped_dict = grouped_dict
+        self.pending_events = []
+
+    def __enter__(self):
+        self.grouped_dict._bulk_mode = True
+        self.grouped_dict._bulk_context = self
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.grouped_dict._bulk_mode = False
+        self.grouped_dict._bulk_context = None
+        if not exc_type and self.pending_events:
+            # Fire single BULK_UPDATE event with all changes
+            for observer_id, callback in self.grouped_dict._observers.items():
+                try:
+                    callback(ChangeEvent.BULK_UPDATE, changes=self.pending_events)
+                except Exception as e:
+                    logging.warning(f'reason=bulkUpdateObserverException,observerId={observer_id},e={e}')
+        return False
+
+    def add_event(self, event_type: ChangeEvent, **kwargs):
+        """Add event to pending list"""
+        event = {'event_type': event_type}
+        event.update(kwargs)
+        self.pending_events.append(event)
+
 class GroupedPropertyDict():
     """
     GroupedPropertyDict is a dict of dicts of PythonProperty instances,
@@ -183,54 +223,110 @@ class GroupedPropertyDict():
     def __init__(self):
         self._lock = Lock()
         self._properties = {}
+        self._observers = {}
+        self._bulk_mode = False
+        self._bulk_context = None
 
-    def get(self, group: str, id: str) -> Optional[dict]:
+    def value(self, group: str, id: str) -> Any:
+        """
+        Returns the value of PythonProperty group.id
+        TODO: Is the lock even needed here?
+        """
+        # get is thread-safe for this class, and value() is thread-safe for PythonProperty
+        property = self.get(group, id)
+        if property:
+            return property.value()
+        else:
+            return None
+
+    def type(self, group: str, id: str) -> Any:
+        """
+        Returns the type of PythonProperty group.id
+        """
+        # get is thread-safe for this class, and type() is thread-safe for PythonProperty
+        property = self.get(group, id)
+        if property:
+            return property.type()
+        else:
+            return None
+
+    def format(self, group: str, id: str) -> Any:
+        """
+        Returns the format of PythonProperty group.id
+        """
+        # get is thread-safe for this class, and format() is thread-safe for PythonProperty
+        property = self.get(group, id)
+        if property:
+            return property.format()
+        else:
+            return None
+
+    def get(self, group: str, id: str) -> Optional[PythonProperty]:
         """
         Returns the PythonProperty group.id
         """
         with self._lock:
-            group_dict = self._properties.get(group, {})
-            # OK to release lock now?
-        if not group_dict:
-            logging.warning(f'reason=groupedPropertiesGetGroupNotFound,group={group},id:{id}')
-        return group_dict.get(id, None)
+            if group not in self._properties:
+                logging.debug(f'reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}')
+                return None
+            if id not in self._properties[group]:
+                logging.debug(f'reason=groupedPropertiesGetNoPythonPropertyByThatId,group={group},id={id}')
+                return None
+            return self._properties[group][id]
 
-    def value(self, group: str, id: str) -> Any:
-        """
-        Returns the value of the PythonProperty group.id
-        """
-        # get() is thread-safe for the GroupedPropertyDict, and value() is thread-safe for PythonProperty?
-        property = self.get(group, id)
-        return property.value()
+    def create_group(self, group_name: str) -> None:
+        """Explicitly create a new group"""
+        with self._lock:
+            if group_name in self._properties:
+                logging.warning(f'reason=groupAlreadyExists,groupName={group_name}')
+                return
+            self._properties[group_name] = {}
+        self._fire_event(ChangeEvent.GROUP_CREATED, group_name=group_name)
 
-    def type(self, group: str, id: str) -> Any:
-        """
-        Returns the type of the PythonProperty group.id
-        """
-        # get() is thread-safe for the GroupedPropertyDict, and type() is thread-safe for PythonProperty?
-        property = self.get(group, id)
-        return property.type()
+    def delete_group(self, group_name: str) -> None:
+        """Delete a group and all its properties"""
+        with self._lock:
+            if group_name not in self._properties:
+                logging.warning(f'reason=deleteGroupNotFound,groupName={group_name}')
+                return
+            del self._properties[group_name]
+        self._fire_event(ChangeEvent.GROUP_DELETED, group_name=group_name)
 
-    def format(self, group: str, id: str) -> Any:
-        """
-        Returns the format of the PythonProperty group.id
-        """
-        # get() is thread-safe for the GroupedPropertyDict, and format() is thread-safe for PythonProperty?
-        property = self.get(group, id)
-        return property.format()
+    def delete_property(self, group: str, property_id: str) -> None:
+        """Delete a specific property from a group"""
+        with self._lock:
+            if group not in self._properties:
+                logging.warning(f'reason=deletePropertyGroupNotFound,group={group},propertyId={property_id}')
+                return
+            if property_id not in self._properties[group]:
+                logging.warning(f'reason=deletePropertyNotFound,group={group},propertyId={property_id}')
+                return
+            del self._properties[group][property_id]
+        self._fire_event(ChangeEvent.PROPERTY_REMOVED, group_name=group, property_id=property_id)
 
-    def add_property(self, group: str, property) -> PythonProperty:
+    def group_exists(self, group_name: str) -> bool:
+        """Check if a group exists"""
+        with self._lock:
+            return group_name in self._properties
+
+    def add_property(self, group: str, property: PythonProperty) -> PythonProperty:
         """
         Adds PythonProperty to the group, returns the PythonProperty
         """
         # id() thread-safe for PythonProperty
         property_id = property.id()
+        group_created = False
         with self._lock:
             if group not in self._properties:
-                # Group doesn't exist, to add it first
-                self._properties.update({group: {}})
+                # Group doesn't exist, create it first
+                self._properties[group] = {}
+                group_created = True
             self._properties[group][property_id] = property
-            return property
+        # Fire events outside the lock to avoid deadlock
+        if group_created:
+            self._fire_event(ChangeEvent.GROUP_CREATED, group_name=group)
+        self._fire_event(ChangeEvent.PROPERTY_ADDED, group_name=group, property_id=property_id, property=property)
+        return property
 
     def add_property_from_dict(self, group: str, property_dict: dict = {}) -> PythonProperty:
         """
@@ -290,7 +386,17 @@ class GroupedPropertyDict():
                 logging.warning(f'reason=groupedPropertiesSetValueNoGroupByThatName,group={group},id={id},value={value}')
             else:
                 logging.warning(f'reason=groupedPropertiesSetValueNoPythonPropertyByThatId,group={group},id={id},value={value}')
-        return this_property.set_value(value)
+            return None
+        old_value = this_property.value()
+        result = this_property.set_value(value)
+        if old_value != value:
+            self._fire_event(ChangeEvent.PROPERTY_CHANGED,
+                             group_name=group,
+                             property_id=id,
+                             property=this_property,
+                             old_value=old_value,
+                             new_value=value)
+        return result
 
     def set_entity(self, group: str, id: str, value: Any) -> Any:
         """
@@ -325,7 +431,7 @@ class GroupedPropertyDict():
         Returns a list of groups
         """
         with self._lock:
-            return self._properties.keys()
+            return list(self._properties.keys())
 
     def items(self, group: str) -> List:
         """
@@ -343,6 +449,56 @@ class GroupedPropertyDict():
             returned_dict.update({group: group_dict})
         return returned_dict
 
+    def add_observer(self, callback: Callable, event_types: List[ChangeEvent] = None,
+                    group_filter: str = None) -> uuid.UUID:
+        """
+        Register an observer for changes
+        callback signature: callback(event_type: ChangeEvent, **kwargs)
+        Returns observer_id for later removal
+        """
+        observer_id = uuid.uuid1()
+        with self._lock:
+            self._observers[observer_id] = callback
+        logging.info(f'reason=observerRegistered,observerId={observer_id}')
+        return observer_id
+
+    def remove_observer(self, observer_id: uuid.UUID) -> bool:
+        """Remove an observer"""
+        with self._lock:
+            if observer_id in self._observers:
+                del self._observers[observer_id]
+                logging.info(f'reason=observerRemoved,observerId={observer_id}')
+                return True
+            return False
+
+    def bulk_update(self) -> BulkUpdateContext:
+        """Return a context manager for bulk updates"""
+        return BulkUpdateContext(self)
+
+    def _fire_event(self, event_type: ChangeEvent, **kwargs):
+        """Fire an event to all observers"""
+        if self._bulk_mode and self._bulk_context:
+            # In bulk mode, accumulate events
+            self._bulk_context.add_event(event_type, **kwargs)
+        else:
+            # Fire immediately
+            with self._lock:
+                observers = list(self._observers.items())
+            for observer_id, callback in observers:
+                try:
+                    callback(event_type, **kwargs)
+                except Exception as e:
+                    logging.warning(f'reason=observerCallbackException,observerId={observer_id},eventType={event_type},e={e}')
+
+    def get_groups_by_pattern(self, pattern: str) -> List[str]:
+        """Return groups matching regex pattern"""
+        with self._lock:
+            return [g for g in self._properties.keys() if re.match(pattern, g)]
+
+    def has_group(self, group_name: str) -> bool:
+        """Check if specific group exists"""
+        with self._lock:
+            return group_name in self._properties
 
 class PropertyDict():
     """
@@ -403,4 +559,4 @@ class PropertyDict():
         Returns a list containing id of each PythonProperty in the PropertyDict
         """
         with self._lock:
-            return self._properties.keys()
+            return list(self._properties.keys())
