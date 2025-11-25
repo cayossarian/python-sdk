@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Python SDK implementing the Homie MQTT Convention (version 5) for eBus IoT devices. The SDK provides a framework for representing devices, nodes, and properties over MQTT, following the eBus MQTT Convention (https://github.com/spanio/eBus-MQTT-Convention).
+This is a Python SDK implementing the Homie MQTT Convention (version 5) for eBus IoT devices. The SDK provides:
+- **Device role**: Framework for representing devices, nodes, and properties over MQTT
+- **Controller role**: Auto-discovery and interaction with Homie devices on an MQTT broker
+
+Follows the eBus MQTT Convention (https://github.com/spanio/eBus-MQTT-Convention).
 
 ## Core Architecture
 
@@ -89,9 +93,26 @@ Broker configuration is loaded from JSON file specified by `EBUS_BROKER_CFG` env
     "type": "USER_PASS",
     "username": "myuser",
     "password": "secret"
-  }
+  },
+  "use_tls": false
 }
 ```
+
+For MQTTS connections (TLS/SSL):
+```json
+{
+  "host": "span-panel.local",
+  "port": 8883,
+  "authentication": {
+    "type": "USER_PASS",
+    "username": "panel-serial-number",
+    "password": "mqtt-password"
+  },
+  "use_tls": true
+}
+```
+
+Note: When `use_tls` is true, the MqttClient uses TLS 1.2 with `tls_insecure_set(True)` to support self-signed certificates.
 
 ### Environment Variables
 - `EBUS_BROKER_CFG`: Path to broker configuration JSON file
@@ -99,7 +120,9 @@ Broker configuration is loaded from JSON file specified by `EBUS_BROKER_CFG` env
 - `PUBLIC_MQTT_ENDPOINT`: Default broker endpoint (default: 127.0.0.1)
 - `PUBLIC_MQTT_PORT`: Default broker port (default: 1885)
 
-## Running the Example
+## Running Examples
+
+### Device Example
 
 ```bash
 # Run the example device adapter
@@ -110,6 +133,19 @@ The example creates:
 - A Homie device with ID `33A3D78A3D78`
 - An "environment" node with temperature, air-pressure, and humidity properties
 - MQTT topics published to `ebus/5/{device_id}/...`
+
+### Controller Example
+
+```bash
+# Run the example controller
+python3 example-controller.py
+```
+
+The controller will:
+- Auto-discover all Homie devices on the broker
+- Display device descriptions and property values
+- Monitor property changes in real-time
+- Show a summary every 30 seconds
 
 ## Important Implementation Notes
 
@@ -137,6 +173,73 @@ For properties that can be set remotely:
 ### Child Devices
 Child devices must specify both `root_id` and `parent_id`. The implementation notes that child devices likely need to share the MQTT connection with the root device (currently not fully implemented).
 
+## Controller Role
+
+The SDK now includes a **Controller** class that implements the Homie controller role for discovering and interacting with devices.
+
+### Controller Features
+
+- **Auto-discovery**: Subscribe to `+/5/+/$state` to discover all Homie devices
+- **Device tracking**: Maintains registry of discovered devices with state, descriptions, and property values
+- **Description parsing**: Automatically fetches and parses `$description` JSON for each device
+- **Property monitoring**: Subscribes to all property topics and tracks value changes
+- **Command sending**: Send commands to settable properties via `/set` topics
+- **Broadcasting**: Send broadcast messages to all devices
+- **Event callbacks**: Register callbacks for device discovery, state changes, property updates, etc.
+
+### Controller Usage
+
+```python
+import json
+from homie import Controller
+
+# Load broker config
+with open('broker-cfg.json', 'r') as f:
+    mqtt_cfg = json.load(f)
+
+# Create controller
+controller = Controller(mqtt_cfg=mqtt_cfg)
+
+# Register callbacks
+controller.set_on_device_discovered_callback(
+    lambda dev: print(f"Found device: {dev.device_id}"))
+controller.set_on_property_changed_callback(
+    lambda dev_id, node, prop, val, old: print(f"{dev_id}/{node}/{prop} = {val}"))
+
+# Start discovery
+controller.start_discovery()
+
+# Send command to a device
+controller.set_property('device-id', 'node-id', 'property-id', 'value')
+
+# Broadcast message
+controller.broadcast('alert', 'System maintenance in 5 minutes')
+
+# Get discovered devices
+devices = controller.get_all_devices()
+for device_id, device in devices.items():
+    print(f"{device_id}: {device.state}")
+```
+
+### DiscoveredDevice Class
+
+The `DiscoveredDevice` class represents a device discovered by the controller:
+
+- `device_id`: Device identifier
+- `state`: Current device state (init, ready, disconnected, sleeping, lost)
+- `description`: Parsed JSON description with nodes and properties
+- `properties`: Dictionary of current property values `{node_id: {property_id: value}}`
+- `property_targets`: Dictionary of property target values
+- `last_seen`: Timestamp of last message received
+
+Helper methods:
+- `get_property(node_id, property_id)`: Get current property value
+- `get_property_target(node_id, property_id)`: Get property target value
+- `get_nodes()`: Get list of node IDs from description
+- `get_node_properties(node_id)`: Get properties dict for a node
+
+Note: The `$description` JSON format uses dictionaries (objects) for nodes and properties, not arrays.
+
 ## Known Limitations & TODOs
 
 From the codebase comments:
@@ -148,10 +251,14 @@ From the codebase comments:
 
 ## File Organization
 
-- `homie.py`: Core Homie convention implementation (Device, Node, Property classes)
+- `homie.py`: Core Homie convention implementation
+  - `Device`, `Node`, `Property` classes (device role)
+  - `Controller`, `DiscoveredDevice` classes (controller role)
+  - Enums: `DeviceState`, `PropertyDatatype`, `Unit`
 - `property.py`: Application-level property abstractions (PythonProperty, GroupedPropertyDict)
 - `mqtt.py`: MQTT client wrapper around paho-mqtt
-- `example-device.py`: Reference implementation showing adapter pattern
+- `example-device.py`: Reference device implementation showing adapter pattern
+- `example-controller.py`: Reference controller implementation showing device discovery
 - `strenum.py`: Workaround for StrEnum compatibility with older Python versions
 - `broker-cfg.json`: MQTT broker connection configuration
 - `OLD/`: Previous iterations of implementation files

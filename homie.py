@@ -675,10 +675,11 @@ class Node:
             property.set_node(self)
         # Note set_subscribe() checks if property is settable...
         property.set_subscribe()
+        # Add property to dictionary BEFORE publishing description
+        self._properties.update({property.id(): property})
         self.device().publish_description()
         # TODO FIXME DCJ is property.publish_value() the right thing to do here?
         property.publish_value()
-        self._properties.update({property.id(): property})
         return property
 
     def add_property_from_dict(self, property_dict: dict) -> Property:
@@ -1273,3 +1274,443 @@ def ebus_cfg_add_auth(cfg, username, password):
         "password": password
     }
     return cfg
+
+
+class DiscoveredDevice:
+    """
+    Represents a device discovered by a Controller.
+    Stores device metadata, description, and current property values.
+    """
+    def __init__(self, device_id: str, homie_domain: str = EBUS_HOMIE_DOMAIN):
+        self.device_id = device_id
+        self.homie_domain = homie_domain
+        self.state = None
+        self.description = None  # Parsed JSON from $description topic
+        self.properties = {}  # {node_id: {property_id: value}}
+        self.property_targets = {}  # {node_id: {property_id: target_value}}
+        self.last_seen = None
+
+    def update_state(self, state: str) -> None:
+        """Update device state"""
+        self.state = state
+        self.last_seen = time.time()
+
+    def update_description(self, description_json: str) -> None:
+        """Parse and store device description"""
+        try:
+            self.description = json.loads(description_json)
+            self.last_seen = time.time()
+        except json.JSONDecodeError as e:
+            logger.error(f'reason=descriptionParseError,deviceID={self.device_id},error={e}')
+
+    def update_property(self, node_id: str, property_id: str, value: str) -> None:
+        """Update a property value"""
+        if node_id not in self.properties:
+            self.properties[node_id] = {}
+        self.properties[node_id][property_id] = value
+        self.last_seen = time.time()
+
+    def update_property_target(self, node_id: str, property_id: str, target: str) -> None:
+        """Update a property target value"""
+        if node_id not in self.property_targets:
+            self.property_targets[node_id] = {}
+        self.property_targets[node_id][property_id] = target
+        self.last_seen = time.time()
+
+    def get_property(self, node_id: str, property_id: str) -> Optional[str]:
+        """Get current value of a property"""
+        return self.properties.get(node_id, {}).get(property_id)
+
+    def get_property_target(self, node_id: str, property_id: str) -> Optional[str]:
+        """Get target value of a property"""
+        return self.property_targets.get(node_id, {}).get(property_id)
+
+    def get_nodes(self) -> List[str]:
+        """Get list of node IDs from description"""
+        if not self.description or 'nodes' not in self.description:
+            return []
+        return list(self.description['nodes'].keys())
+
+    def get_node_properties(self, node_id: str) -> dict:
+        """Get properties dict for a node from description"""
+        if not self.description or 'nodes' not in self.description:
+            return {}
+        nodes = self.description['nodes']
+        if node_id in nodes:
+            return nodes[node_id].get('properties', {})
+        return {}
+
+
+class Controller:
+    """
+    Homie MQTT Controller - discovers and interacts with Homie devices
+
+    A controller can:
+    - Auto-discover devices on the MQTT broker
+    - Read device descriptions and understand their structure
+    - Monitor property values
+    - Send commands to settable properties
+    - Broadcast messages to all devices
+
+    Usage example:
+        controller = Controller(mqtt_cfg={'host': 'localhost', 'port': 1883})
+        controller.set_on_device_discovered_callback(lambda dev: print(f"Found: {dev.device_id}"))
+        controller.set_on_property_changed_callback(
+            lambda dev_id, node, prop, val: print(f"{dev_id}/{node}/{prop} = {val}"))
+        controller.start_discovery()
+
+        # Send a command to a device
+        controller.set_property('my-device-id', 'lights', 'power', 'true')
+    """
+
+    def __init__(self,
+                 mqtt_cfg: Optional[dict] = {},
+                 homie_domain: str = EBUS_HOMIE_DOMAIN,
+                 auto_start: bool = False):
+        """
+        Initialize a Homie Controller
+
+        Args:
+            mqtt_cfg: MQTT broker configuration (same format as Device class)
+            homie_domain: Homie domain to monitor (default: 'ebus')
+            auto_start: If True, automatically start discovery on init
+        """
+        self.homie_domain = homie_domain
+        self._mqtt_cfg = mqtt_cfg
+        self.mqttc = None
+        self.devices = {}  # {device_id: DiscoveredDevice}
+
+        # Callbacks
+        self._on_device_discovered = None
+        self._on_device_state_changed = None
+        self._on_device_removed = None
+        self._on_property_changed = None
+        self._on_description_received = None
+
+        # Connect to broker
+        self._connect_broker()
+
+        if auto_start:
+            self.start_discovery()
+
+    def _connect_broker(self) -> None:
+        """Connect to MQTT broker"""
+        if self.mqttc:
+            return
+
+        user_pass_valid = False
+        client_id = f'homie-controller-{os.getpid()}'
+        broker_endpoint = self._mqtt_cfg.get('host', EBUS_BROKER_DEFAULT_ENDPOINT)
+        broker_port = self._mqtt_cfg.get('port', EBUS_BROKER_DEFAULT_PORT)
+        broker_authentication = self._mqtt_cfg.get('authentication', {})
+        authentication_type = broker_authentication.get('type', 'NONE')
+        use_tls = self._mqtt_cfg.get('use_tls', False)
+
+        if authentication_type == USER_PASS_TYPE:
+            username = broker_authentication.get('username', None)
+            password = broker_authentication.get('password', None)
+            user_pass_valid = username and password
+
+        logger.info(f'reason=controllerConnectBroker,host={broker_endpoint},port={broker_port},authType={authentication_type},useTls={use_tls},clientID={client_id}')
+
+        try:
+            if authentication_type == 'NONE':
+                self.mqttc = MqttClient(client_id=client_id,
+                                       endpoint=broker_endpoint,
+                                       port=broker_port,
+                                       use_tls=use_tls,
+                                       on_connect_callback=partial(self._on_connect))
+            elif (authentication_type == USER_PASS_TYPE) and user_pass_valid:
+                self.mqttc = MqttClient(client_id=client_id,
+                                       endpoint=broker_endpoint,
+                                       port=broker_port,
+                                       username=username,
+                                       password=password,
+                                       use_tls=use_tls,
+                                       on_connect_callback=partial(self._on_connect))
+            else:
+                logger.exception(f'reason=controllerConnectException,authType={authentication_type}')
+                return
+
+            self.mqttc.start(blocking=False)
+            logger.info(f'reason=controllerConnected,clientID={client_id}')
+
+        except Exception as e:
+            logger.exception(f'reason=controllerConnectException,error={e}')
+
+    def _on_connect(self) -> None:
+        """Called when controller connects to MQTT broker"""
+        logger.info(f'reason=controllerOnConnect')
+        # Re-subscribe to all topics on reconnect
+        if self.devices:
+            for device_id in self.devices.keys():
+                self._subscribe_to_device(device_id)
+
+    def start_discovery(self, homie_domain: Optional[str] = None) -> None:
+        """
+        Start auto-discovery of Homie devices
+
+        Subscribes to the discovery topic pattern: +/5/+/$state
+        Controllers can optionally restrict to a specific homie_domain
+
+        Args:
+            homie_domain: Optional specific domain to monitor (default: uses instance domain)
+        """
+        if not self.mqttc:
+            logger.error('reason=discoveryFailedNoConnection')
+            return
+
+        domain = homie_domain or self.homie_domain
+        discovery_topic = f'{domain}/{EBUS_HOMIE_VERSION_MAJOR}/+/$state'
+
+        logger.info(f'reason=startDiscovery,topic={discovery_topic}')
+        self.mqttc.subscribe(discovery_topic,
+                            param=self._on_state_message,
+                            qos=EBUS_HOMIE_MQTT_QOS)
+
+    def _on_state_message(self, topic: str, payload: bytes) -> None:
+        """
+        Handle device $state messages
+
+        Topic format: {domain}/5/{device_id}/$state
+        Payload: init, ready, disconnected, sleeping, lost, or empty (device removal)
+        """
+        parts = topic.split('/')
+        if len(parts) != 4 or parts[3] != '$state':
+            logger.warning(f'reason=invalidStateTopic,topic={topic}')
+            return
+
+        homie_domain = parts[0]
+        device_id = parts[2]
+
+        # Decode payload
+        payload_str = payload.decode('utf-8') if isinstance(payload, bytes) else payload
+
+        # Empty payload indicates device removal
+        if not payload_str or len(payload_str) == 0:
+            logger.info(f'reason=deviceRemoved,deviceID={device_id}')
+            if device_id in self.devices:
+                removed_device = self.devices[device_id]
+                del self.devices[device_id]
+                if self._on_device_removed:
+                    self._on_device_removed(removed_device)
+            return
+
+        # New or existing device
+        if device_id not in self.devices:
+            # New device discovered
+            logger.info(f'reason=deviceDiscovered,deviceID={device_id},state={payload_str},knownDevices={list(self.devices.keys())}')
+            device = DiscoveredDevice(device_id, homie_domain)
+            device.update_state(payload_str)
+            self.devices[device_id] = device
+
+            # Subscribe to device's $description and all properties
+            self._subscribe_to_device(device_id)
+
+            if self._on_device_discovered:
+                self._on_device_discovered(device)
+        else:
+            # Existing device state changed
+            device = self.devices[device_id]
+            old_state = device.state
+
+            # Only trigger callback if state actually changed
+            if old_state != payload_str:
+                device.update_state(payload_str)
+                logger.info(f'reason=deviceStateChanged,deviceID={device_id},oldState={old_state},newState={payload_str}')
+                if self._on_device_state_changed:
+                    self._on_device_state_changed(device, old_state, payload_str)
+            else:
+                # Still update last_seen even if state didn't change
+                device.update_state(payload_str)
+                logger.debug(f'reason=deviceStateRefreshed,deviceID={device_id},state={payload_str}')
+
+    def _subscribe_to_device(self, device_id: str) -> None:
+        """Subscribe to all topics for a discovered device"""
+        if not self.mqttc:
+            return
+
+        base_topic = f'{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}'
+
+        # Subscribe to $description
+        description_topic = f'{base_topic}/$description'
+        self.mqttc.subscribe(description_topic,
+                           param=partial(self._on_description_message, device_id),
+                           qos=EBUS_HOMIE_MQTT_QOS)
+
+        # Subscribe to all properties and targets
+        property_topic = f'{base_topic}/+/+'
+        self.mqttc.subscribe(property_topic,
+                           param=partial(self._on_property_message, device_id),
+                           qos=EBUS_HOMIE_MQTT_QOS)
+
+        # Subscribe to all property targets
+        target_topic = f'{base_topic}/+/+/$target'
+        self.mqttc.subscribe(target_topic,
+                           param=partial(self._on_target_message, device_id),
+                           qos=EBUS_HOMIE_MQTT_QOS)
+
+    def _on_description_message(self, device_id: str, topic: str, payload: bytes) -> None:
+        """Handle device $description messages"""
+        if device_id not in self.devices:
+            return
+
+        payload_str = payload.decode('utf-8') if isinstance(payload, bytes) else payload
+        device = self.devices[device_id]
+        device.update_description(payload_str)
+
+        logger.info(f'reason=descriptionReceived,deviceID={device_id}')
+        if self._on_description_received:
+            self._on_description_received(device)
+
+    def _on_property_message(self, device_id: str, topic: str, payload: bytes) -> None:
+        """
+        Handle property value messages
+
+        Topic format: {domain}/5/{device_id}/{node_id}/{property_id}
+        Skip $target topics (handled separately)
+        """
+        # Skip $target topics
+        if topic.endswith('/$target'):
+            return
+
+        parts = topic.split('/')
+        if len(parts) != 5:
+            return
+
+        node_id = parts[3]
+        property_id = parts[4]
+
+        # Skip attribute topics (starting with $)
+        if property_id.startswith('$'):
+            return
+
+        if device_id not in self.devices:
+            return
+
+        payload_str = payload.decode('utf-8') if isinstance(payload, bytes) else payload
+        device = self.devices[device_id]
+        old_value = device.get_property(node_id, property_id)
+        device.update_property(node_id, property_id, payload_str)
+
+        logger.debug(f'reason=propertyChanged,deviceID={device_id},node={node_id},property={property_id},value={payload_str}')
+        if self._on_property_changed:
+            self._on_property_changed(device_id, node_id, property_id, payload_str, old_value)
+
+    def _on_target_message(self, device_id: str, topic: str, payload: bytes) -> None:
+        """
+        Handle property $target messages
+
+        Topic format: {domain}/5/{device_id}/{node_id}/{property_id}/$target
+        """
+        parts = topic.split('/')
+        if len(parts) != 6 or parts[5] != '$target':
+            return
+
+        node_id = parts[3]
+        property_id = parts[4]
+
+        if device_id not in self.devices:
+            return
+
+        payload_str = payload.decode('utf-8') if isinstance(payload, bytes) else payload
+        device = self.devices[device_id]
+        device.update_property_target(node_id, property_id, payload_str)
+
+        logger.debug(f'reason=targetChanged,deviceID={device_id},node={node_id},property={property_id},target={payload_str}')
+
+    def set_property(self, device_id: str, node_id: str, property_id: str, value: str, qos: int = EBUS_HOMIE_MQTT_QOS) -> bool:
+        """
+        Send a command to set a device property
+
+        Publishes to: {domain}/5/{device_id}/{node_id}/{property_id}/set
+        Uses non-retained messages as per Homie convention
+
+        Args:
+            device_id: Target device ID
+            node_id: Target node ID
+            property_id: Target property ID
+            value: Value to set (as string)
+            qos: MQTT QoS level (default: 2)
+
+        Returns:
+            True if message was sent successfully, False otherwise
+        """
+        if not self.mqttc:
+            logger.error('reason=setPropertyFailedNoConnection')
+            return False
+
+        set_topic = f'{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{property_id}/set'
+
+        logger.info(f'reason=settingProperty,topic={set_topic},value={value}')
+        try:
+            # Non-retained message as per convention
+            self.mqttc.publish(set_topic, value, qos=qos, retain=False)
+            return True
+        except Exception as e:
+            logger.error(f'reason=setPropertyException,error={e}')
+            return False
+
+    def broadcast(self, subtopic: str, message: str, qos: int = EBUS_HOMIE_MQTT_QOS) -> bool:
+        """
+        Broadcast a message to all Homie devices
+
+        Publishes to: {domain}/5/$broadcast/{subtopic}
+
+        Args:
+            subtopic: Broadcast subtopic (can be multi-level)
+            message: Message payload
+            qos: MQTT QoS level
+
+        Returns:
+            True if message was sent successfully, False otherwise
+        """
+        if not self.mqttc:
+            logger.error('reason=broadcastFailedNoConnection')
+            return False
+
+        broadcast_topic = f'{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/$broadcast/{subtopic}'
+
+        logger.info(f'reason=broadcasting,topic={broadcast_topic}')
+        try:
+            self.mqttc.publish(broadcast_topic, message, qos=qos, retain=False)
+            return True
+        except Exception as e:
+            logger.error(f'reason=broadcastException,error={e}')
+            return False
+
+    def get_device(self, device_id: str) -> Optional[DiscoveredDevice]:
+        """Get a discovered device by ID"""
+        return self.devices.get(device_id)
+
+    def get_all_devices(self) -> dict:
+        """Get all discovered devices"""
+        return self.devices.copy()
+
+    def stop(self) -> None:
+        """Stop the controller and disconnect from broker"""
+        if self.mqttc:
+            logger.info('reason=stoppingController')
+            self.mqttc.stop()
+            self.mqttc = None
+
+    # Callback setters
+    def set_on_device_discovered_callback(self, callback: Callable[[DiscoveredDevice], None]) -> None:
+        """Set callback for when a new device is discovered"""
+        self._on_device_discovered = callback
+
+    def set_on_device_state_changed_callback(self, callback: Callable[[DiscoveredDevice, str, str], None]) -> None:
+        """Set callback for when a device state changes (device, old_state, new_state)"""
+        self._on_device_state_changed = callback
+
+    def set_on_device_removed_callback(self, callback: Callable[[DiscoveredDevice], None]) -> None:
+        """Set callback for when a device is removed"""
+        self._on_device_removed = callback
+
+    def set_on_property_changed_callback(self, callback: Callable[[str, str, str, str, Optional[str]], None]) -> None:
+        """Set callback for property changes (device_id, node_id, property_id, new_value, old_value)"""
+        self._on_property_changed = callback
+
+    def set_on_description_received_callback(self, callback: Callable[[DiscoveredDevice], None]) -> None:
+        """Set callback for when a device description is received"""
+        self._on_description_received = callback
