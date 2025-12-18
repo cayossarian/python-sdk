@@ -10,6 +10,7 @@ import os
 import collections
 import threading
 import sys
+import uuid
 import homie as homie
 from homie import EBUS_HOMIE_DOMAIN, EBUS_HOMIE_VERSION_MAJOR, DeviceState, PropertyDatatype, Unit
 from functools import cached_property, partial, reduce
@@ -74,7 +75,7 @@ def set_homie_property_from_python_property(homie_property: homie.Property,
     The PythonProperty's callback returns the PythonProperty,
     and this function sets the homie.Property's value to the value of the PythonProperty
     """
-    return homie_property.set(python_property.value())
+    return homie_property.set_value(python_property.value())
 
 
 class ExampleDeviceAdapter():
@@ -189,7 +190,6 @@ class ExampleDeviceAdapter():
     def create_device_and_nodes(self):
         self._homie_device = self.create_homie_device()
         self.add_homie_environment_node()
-        self._homie_device.set_state(DeviceState.READY)
 
 
 def main():

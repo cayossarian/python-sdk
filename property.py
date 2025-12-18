@@ -2,7 +2,7 @@ import uuid
 import logging
 import re
 from enum import Enum
-from threading import Lock
+from threading import Lock, RLock
 from typing import List, Callable, Union, Optional, Any, Type, Dict
 
 class ChangeEvent(Enum):
@@ -221,7 +221,7 @@ class GroupedPropertyDict():
     """
 
     def __init__(self):
-        self._lock = Lock()
+        self._lock = RLock()  # RLock needed because _fire_event is called while holding lock
         self._properties = {}
         self._observers = {}
         self._bulk_mode = False
@@ -276,12 +276,15 @@ class GroupedPropertyDict():
 
     def create_group(self, group_name: str) -> None:
         """Explicitly create a new group"""
+        if not isinstance(group_name, str) or not group_name:
+            logging.warning(f'reason=createGroupInvalidGroupName,groupName={group_name},type={type(group_name).__name__}')
+            return
         with self._lock:
             if group_name in self._properties:
                 logging.warning(f'reason=groupAlreadyExists,groupName={group_name}')
                 return
             self._properties[group_name] = {}
-        self._fire_event(ChangeEvent.GROUP_CREATED, group_name=group_name)
+            self._fire_event(ChangeEvent.GROUP_CREATED, group_name=group_name)
 
     def delete_group(self, group_name: str) -> None:
         """Delete a group and all its properties"""
@@ -290,7 +293,7 @@ class GroupedPropertyDict():
                 logging.warning(f'reason=deleteGroupNotFound,groupName={group_name}')
                 return
             del self._properties[group_name]
-        self._fire_event(ChangeEvent.GROUP_DELETED, group_name=group_name)
+            self._fire_event(ChangeEvent.GROUP_DELETED, group_name=group_name)
 
     def delete_property(self, group: str, property_id: str) -> None:
         """Delete a specific property from a group"""
@@ -302,7 +305,7 @@ class GroupedPropertyDict():
                 logging.warning(f'reason=deletePropertyNotFound,group={group},propertyId={property_id}')
                 return
             del self._properties[group][property_id]
-        self._fire_event(ChangeEvent.PROPERTY_REMOVED, group_name=group, property_id=property_id)
+            self._fire_event(ChangeEvent.PROPERTY_REMOVED, group_name=group, property_id=property_id)
 
     def group_exists(self, group_name: str) -> bool:
         """Check if a group exists"""
@@ -313,20 +316,19 @@ class GroupedPropertyDict():
         """
         Adds PythonProperty to the group, returns the PythonProperty
         """
+        if not isinstance(group, str) or not group:
+            logging.warning(f'reason=addPropertyInvalidGroupName,group={group},type={type(group).__name__}')
+            return None
         # id() thread-safe for PythonProperty
         property_id = property.id()
-        group_created = False
         with self._lock:
             if group not in self._properties:
                 # Group doesn't exist, create it first
                 self._properties[group] = {}
-                group_created = True
+                self._fire_event(ChangeEvent.GROUP_CREATED, group_name=group)
             self._properties[group][property_id] = property
-        # Fire events outside the lock to avoid deadlock
-        if group_created:
-            self._fire_event(ChangeEvent.GROUP_CREATED, group_name=group)
-        self._fire_event(ChangeEvent.PROPERTY_ADDED, group_name=group, property_id=property_id, property=property)
-        return property
+            self._fire_event(ChangeEvent.PROPERTY_ADDED, group_name=group, property_id=property_id, property=property)
+            return property
 
     def add_property_from_dict(self, group: str, property_dict: dict = {}) -> PythonProperty:
         """
@@ -490,15 +492,32 @@ class GroupedPropertyDict():
                 except Exception as e:
                     logging.warning(f'reason=observerCallbackException,observerId={observer_id},eventType={event_type},e={e}')
 
-    def get_groups_by_pattern(self, pattern: str) -> List[str]:
-        """Return groups matching regex pattern"""
+    def get_groups_by_property_value(self, property_id: str, value: Any) -> List[str]:
+        """
+        Return list of group names containing a property with the specified id and value.
+
+        Args:
+            property_id: The id of the property to search for
+            value: The value the property must have
+
+        Returns:
+            List of group names where the property exists and has the matching value
+        """
         with self._lock:
-            return [g for g in self._properties.keys() if re.match(pattern, g)]
+            matching_groups = []
+            if self._properties:
+                for group_name, properties in self._properties.items():
+                    if property_id in properties:
+                        prop = properties[property_id]
+                        if prop.value() == value:
+                            matching_groups.append(group_name)
+            return matching_groups
 
     def has_group(self, group_name: str) -> bool:
         """Check if specific group exists"""
         with self._lock:
             return group_name in self._properties
+
 
 class PropertyDict():
     """

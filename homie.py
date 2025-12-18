@@ -739,7 +739,6 @@ class Node:
         # FIX: Enhanced logging with counts
         logger.info(f'reason=nodeClearedAllProperties,nodeId={self._id},cleared={cleared_count},skipped={skipped_count}')
 
-
     def description(self) -> dict:
         """
         Returns dict representing the Node's $description attribute
@@ -766,6 +765,38 @@ class Node:
         for property_id, property in self._properties.items():
             logger.debug(f'reason=nodePublishProperty,nodeId={node_id},propertyId={property_id}')
             property.publish_value()
+
+
+class StateTransitionContext:
+    """
+    Context manager for Homie device state transitions.
+
+    Ensures the device state is set to INIT at the start and READY at the end,
+    even if an exception occurs during the transition.
+
+    Usage:
+        with device.state_transition():
+            # Add/remove nodes, modify schema
+            device.add_node(...)
+            device.delete_node(...)
+        # State is automatically set to READY here
+    """
+    def __init__(self, device: 'Device'):
+        self.device = device
+
+    def __enter__(self):
+        self.device._begin_state_transition()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Always end the state transition, even if an exception occurred
+        try:
+            self.device._end_state_transition()
+        except Exception as e:
+            logger.warning(f'reason=stateTransitionContextExitException,deviceId={self.device._id},e={e}')
+        # Return False to let any exception from the with block propagate to the caller
+        # (returning True would suppress it)
+        return False
 
 
 class Device:
@@ -824,10 +855,9 @@ class Device:
         # Distinguish between initial and subsequent connections to broker
         self.initial_broker_connection = True
         self.connect_broker()
-        self.set_state(DeviceState.INIT)
-        for node in nodes:
-            self.add_node(node)
-        self.publish_description()
+        with self.state_transition():
+            for node in nodes:
+                self.add_node(node)
 
     def as_dict(self) -> dict:
         nodes = {}
@@ -1115,16 +1145,28 @@ class Device:
             logger.warning(f'reason=deviceClearTopicException,topic={topic_path},e={e}')
             return False
 
-    def begin_state_transition(self) -> None:
+    def _begin_state_transition(self) -> None:
         """Set device state to INIT to begin a state transition"""
         logger.info(f'reason=deviceBeginStateTransition,deviceId={self._id}')
         self.set_state(DeviceState.INIT)
 
-    def end_state_transition(self) -> None:
+    def _end_state_transition(self) -> None:
         """Set device state to READY and publish updated description"""
         logger.info(f'reason=deviceEndStateTransition,deviceId={self._id}')
         self.publish_description()
         self.set_state(DeviceState.READY)
+
+    def state_transition(self) -> StateTransitionContext:
+        """
+        Return a context manager for state transitions.
+
+        Usage:
+            with device.state_transition():
+                # Add/remove nodes, modify schema
+                device.add_node(...)
+        # State is automatically set to READY here, even if an exception occurred
+        """
+        return StateTransitionContext(self)
 
     def refresh_all_nodes(self) -> None:
         """Republish entire device state (for reconnection)"""

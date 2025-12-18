@@ -69,6 +69,7 @@ class MqttClient:
             self.mqttc.username_pw_set(username, password)
         if use_tls:
             logging.info(f'reason=mqttClientTls')
+            # TODO: be able to support either secure or insecure
             # For self-signed certificates, disable certificate verification
             # cert_reqs=ssl.CERT_NONE disables certificate verification entirely
             self.mqttc.tls_set(
@@ -78,6 +79,10 @@ class MqttClient:
             # tls_insecure_set disables hostname verification (in addition to cert verification)
             self.mqttc.tls_insecure_set(True)
         self.mqttc.connect(endpoint, port, keepalive=60)
+
+    def is_connected(self):
+        """Check if MQTT client is connected"""
+        return self.mqttc.is_connected() if hasattr(self, 'mqttc') else False
 
     def start(self, blocking=False):
         self.is_running = True
@@ -92,12 +97,18 @@ class MqttClient:
         self.mqttc.loop_stop()
 
     def publish(self, topic: str, data: str, qos: int = 1, retain: bool = False):
+        if not hasattr(self, 'mqttc'):
+            logging.error(f"reason=mqttPublishNoClient,client={self.client_id},topic={topic}")
+            return
         msg_info = self.mqttc.publish(topic, data, qos, retain)
 
         if msg_info.rc != mqtt.MQTT_ERR_SUCCESS:
             logging.warning(f"reason=mqttPublishFail,client={self.client_id},topic={topic}")
 
     def subscribe(self, sub: str, param: Any, qos: int = 1):
+        if not hasattr(self, 'mqttc'):
+            logging.error(f"reason=mqttSubscribeNoClient,client={self.client_id},sub={sub}")
+            return
         self.sub_callbacks[sub] = (param, qos)
         self.sub_matcher[sub] = sub
         self.mqttc.subscribe(sub, qos)
