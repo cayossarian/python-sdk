@@ -116,7 +116,8 @@ class MqttClient:
     def _on_connect(self, mqttc: mqtt.Client, userdata: Any, flags: int, rc: int):
         logging.info(f"reason=mqttBrokerConnected,client={self.client_id}")
 
-        for sub, (_, qos) in self.sub_callbacks.items():
+        # Loop over a shallow copy of the dictionary keys, so it will not crash if the dict size changes on the fly.
+        for sub, (_, qos) in list(self.sub_callbacks.items()):
             (result, msg_id) = self.mqttc.subscribe(sub, qos)
             if result == mqtt.MQTT_ERR_SUCCESS:
                 logging.info(f"reason=mqttSubscribeSuccess,client={self.client_id},sub={sub}")

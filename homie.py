@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from enum import Enum
 # Workaround due to non-support of StrEnum in current Gen2 FW Python, StrEnum available in enum, remove
 from strenum import StrEnum
@@ -324,18 +325,27 @@ class Property:
         """
         return self._format
 
-    def coerced_value(self) -> str:
+    def coerced_value(self) -> Optional[str]:
         """
-        Returns the property's value (potentially rounded), as a string
+        Returns the property's value (potentially rounded), as a string.
+        Returns None if the value is invalid or cannot be coerced.
         """
         property_value = self.value()
+        if property_value is None:
+            return None
+
         property_type = self.datatype()
-        if property_type == PropertyDatatype.STRING:
-            return property_value
-        elif property_type == PropertyDatatype.BOOLEAN:
+        if property_type == PropertyDatatype.BOOLEAN:
+            if not isinstance(property_value, bool):
+                logger.warning(f'reason=coercedValueInvalidBoolean,propertyId={self._id},value={property_value}')
+                return None
             return str(property_value).lower()
-        else:
-            return property_value
+
+        # For enum values, use .value to get the underlying value
+        if isinstance(property_value, Enum):
+            return str(property_value.value)
+
+        return str(property_value)
 
     def id(self) -> str:
         """
@@ -387,6 +397,20 @@ class Property:
     def settable(self) -> bool:
         return self._settable
 
+    def set_settable(self, value: bool) -> None:
+        """
+        Update the settable attribute of this property.
+        If setting to True, also subscribes to the /set topic.
+        Note: Caller should republish the device description after calling this.
+        """
+        if self._settable == value:
+            return  # No change
+        self._settable = value
+        if value:
+            # Subscribe to the /set topic now that the property is settable
+            self.set_subscribe()
+        logger.info(f'reason=propertySetSettable,id={self._id},settable={self._settable}')
+
     def retained(self) -> bool:
         return self._retained
 
@@ -395,6 +419,10 @@ class Property:
 
     def get_set_callback(self) -> Callable:
         return self._set_callback
+
+    def set_set_callback(self, callback: Callable) -> None:
+        """Set the callback function for handling /set topic messages."""
+        self._set_callback = callback
 
     def supports_target(self) -> bool:
         """
@@ -433,6 +461,9 @@ class Property:
             return False
         try:
             value = self.coerced_value()
+            if value is None:
+                logger.warning(f'reason=propertyPublishValueCoercionFailed,propertyID={self._id},rawValue={self._value}')
+                return False
             logger.debug(f'reason=propertyPublishValue,value={value},topic={topic},retained={self.retained()}')
             mqttc.publish(topic, value, retain=self.retained(), qos=EBUS_HOMIE_MQTT_QOS)
             self._ever_published = True  # FIX: Mark as published
@@ -762,7 +793,8 @@ class Node:
         node_id = self.id()
         property_count = len(self._properties)
         logger.debug(f'reason=nodePublish,nodeId={node_id},propertyCount={property_count}')
-        for property_id, property in self._properties.items():
+        # Use list() to create a shallow copy, preventing crash if dict changes during iteration
+        for property_id, property in list(self._properties.items()):
             logger.debug(f'reason=nodePublishProperty,nodeId={node_id},propertyId={property_id}')
             property.publish_value()
 
@@ -1441,7 +1473,7 @@ class Controller:
             return
 
         user_pass_valid = False
-        client_id = f'homie-controller-{os.getpid()}'
+        client_id = f'homie-controller-{uuid.uuid4()}'
         broker_endpoint = self._mqtt_cfg.get('host', EBUS_BROKER_DEFAULT_ENDPOINT)
         broker_port = self._mqtt_cfg.get('port', EBUS_BROKER_DEFAULT_PORT)
         broker_authentication = self._mqtt_cfg.get('authentication', {})
