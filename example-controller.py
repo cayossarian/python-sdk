@@ -9,15 +9,15 @@ This script demonstrates how to use the Controller class to:
 - Send commands to settable properties
 
 Usage:
-    python3 example-controller.py
-
-The controller will connect to the MQTT broker specified in broker-cfg.json
-and start discovering devices.
+    python3 example-controller.py --config broker-cfg.json
+    EBUS_BROKER_CFG=broker-cfg.json python3 example-controller.py
 """
 
+import argparse
 import json
 import logging
 import os
+import sys
 import time
 from pprint import pprint
 
@@ -76,29 +76,50 @@ def on_property_changed(device_id: str, node_id: str, property_id: str,
         logger.info(f'📊 {device_id}/{node_id}/{property_id}: {old_value} → {new_value}')
 
 
-def load_broker_config(config_file='broker-cfg.json'):
+def load_broker_config(config_file: str):
     """Load MQTT broker configuration from JSON file"""
     try:
         with open(config_file, 'r') as file:
             return json.load(file)
     except FileNotFoundError:
-        logger.warning(f'Config file not found: {config_file}, using defaults')
-        return {}
+        logger.error(f'Config file not found: {config_file}')
+        return None
     except json.JSONDecodeError as e:
         logger.error(f'Error parsing config file: {e}')
-        return {}
+        return None
 
 
 def main():
     """Main function"""
+    parser = argparse.ArgumentParser(
+        description='Homie Controller - auto-discover and monitor Homie devices')
+    parser.add_argument('-c', '--config',
+                        help='Path to broker config JSON file (or set EBUS_BROKER_CFG env var)')
+    args = parser.parse_args()
+
+    # Determine config file: command line takes precedence over env var
+    config_file = args.config or os.environ.get('EBUS_BROKER_CFG')
+    if not config_file:
+        print('Error: No broker config file specified.')
+        print('Provide config via --config option or EBUS_BROKER_CFG environment variable.')
+        print()
+        print('Example config file format:')
+        print('  {')
+        print('    "host": "mqtt.example.com",')
+        print('    "port": 1883,')
+        print('    "authentication": {"type": "USER_PASS", "username": "user", "password": "pass"}')
+        print('  }')
+        sys.exit(1)
+
+    # Load MQTT broker configuration
+    mqtt_cfg = load_broker_config(config_file)
+    if mqtt_cfg is None:
+        sys.exit(1)
+
     print('=' * 60)
     print('Homie Controller Example')
     print('=' * 60)
     print()
-
-    # Load MQTT broker configuration
-    config_file = os.environ.get('EBUS_BROKER_CFG', 'broker-cfg.json')
-    mqtt_cfg = load_broker_config(config_file)
 
     print(f'Connecting to MQTT broker: {mqtt_cfg.get("host")}:{mqtt_cfg.get("port")}')
     print()

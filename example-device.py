@@ -82,6 +82,7 @@ class ExampleDeviceAdapter():
 
     def __init__(self,
                  example_device: Any,
+                 mqtt_cfg: Dict,
                  logger: Optional[logging.Logger] = None):
         # Set up logger
         if logger is None:
@@ -97,24 +98,22 @@ class ExampleDeviceAdapter():
         self._logger = logger
         # End of logger setup
         self._example_device = example_device
+        self._mqtt_cfg = mqtt_cfg
         self.create_device_and_nodes()
 
     def as_dict(self) -> dict:
         return self._example_device.as_dict()
 
     @staticmethod
-    def ebus_broker_cfg() -> Dict:
+    def load_broker_config(config_file: str) -> Dict:
         """
-        Returns eBus MQTT broker configuration as a dict
+        Load and return eBus MQTT broker configuration from a JSON file
         """
-        # If EBUS_BROKER_CFG is not defined in the environment, use hardcoded default
-        mqtt_cfg_file = os.getenv('EBUS_BROKER_CFG', 'broker-cfg.json')
         try:
-            with open(mqtt_cfg_file, 'r') as file:
-                mqtt_auth = json.load(file)
-                return mqtt_auth
+            with open(config_file, 'r') as file:
+                return json.load(file)
         except Exception as e:
-            logging.warning(f'reason=ebusBrokerCfgException,file={mqtt_cfg_file},e={e}')
+            logging.error(f'reason=loadBrokerConfigException,file={config_file},e={e}')
             return {}
 
     def create_homie_device(self) -> homie.Device:
@@ -122,7 +121,7 @@ class ExampleDeviceAdapter():
             homie_device = homie.Device('33A3D78A3D78', # TODO: get this from somewhere
                                         name='Thing1',
                                         type='energy.ebus.device.esp32',
-                                        mqtt_cfg=ExampleDeviceAdapter.ebus_broker_cfg())
+                                        mqtt_cfg=self._mqtt_cfg)
         except Exception as e:
             self._logger.warning(f'reason=createHomieDeviceException,e={e}')
 
@@ -193,6 +192,32 @@ class ExampleDeviceAdapter():
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description='Example Homie device that publishes sensor data')
+    parser.add_argument('-c', '--config',
+                        help='Path to broker config JSON file (or set EBUS_BROKER_CFG env var)')
+    args = parser.parse_args()
+
+    # Determine config file: command line takes precedence over env var
+    config_file = args.config or os.environ.get('EBUS_BROKER_CFG')
+    if not config_file:
+        print('Error: No broker config file specified.')
+        print('Provide config via --config option or EBUS_BROKER_CFG environment variable.')
+        print()
+        print('Example config file format:')
+        print('  {')
+        print('    "host": "mqtt.example.com",')
+        print('    "port": 1883,')
+        print('    "authentication": {"type": "USER_PASS", "username": "user", "password": "pass"}')
+        print('  }')
+        sys.exit(1)
+
+    # Load broker config
+    mqtt_cfg = ExampleDeviceAdapter.load_broker_config(config_file)
+    if not mqtt_cfg:
+        print(f'Error: Failed to load config from {config_file}')
+        sys.exit(1)
+
     # Set up logging
     logging.basicConfig()
     example_device_logger = logging.getLogger('ExampleDevice')
@@ -202,7 +227,7 @@ def main():
 
     example_device = ExampleDevice(logger=example_device_logger)
     example_device_logger.info(f'\n{pformat(example_device.as_dict())}')
-    example_device_adapter = ExampleDeviceAdapter(example_device, logger=example_device_adapter_logger)
+    example_device_adapter = ExampleDeviceAdapter(example_device, mqtt_cfg, logger=example_device_adapter_logger)
     example_device_adapter_logger.info(f'\n{pformat(example_device_adapter.as_dict())}')
     # Wait forever for event that will never come
     event = threading.Event()

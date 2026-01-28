@@ -42,7 +42,13 @@ import logging
 import os
 import time
 import uuid
-from enum import Enum, StrEnum
+from enum import Enum
+try:
+    from enum import StrEnum
+except ImportError:
+    # Python < 3.11 compatibility
+    class StrEnum(str, Enum):
+        pass
 from functools import partial
 # from deprecated import deprecated
 from typing import Any, Callable, List, Optional, Union
