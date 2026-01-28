@@ -259,7 +259,6 @@ From the codebase comments:
 - `mqtt.py`: MQTT client wrapper around paho-mqtt
 - `example-device.py`: Reference device implementation showing adapter pattern
 - `example-controller.py`: Reference controller implementation showing device discovery
-- `strenum.py`: Workaround for StrEnum compatibility with older Python versions
 - `broker-cfg.json`: MQTT broker connection configuration
 - `OLD/`: Previous iterations of implementation files
 

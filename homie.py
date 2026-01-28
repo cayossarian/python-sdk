@@ -42,9 +42,7 @@ import logging
 import os
 import time
 import uuid
-from enum import Enum
-# Workaround due to non-support of StrEnum in current Gen2 FW Python, StrEnum available in enum, remove
-from strenum import StrEnum
+from enum import Enum, StrEnum
 from functools import partial
 # from deprecated import deprecated
 from typing import Any, Callable, List, Optional, Union
