@@ -36,7 +36,7 @@ from ebus_sdk import Controller, DiscoveredDevice
 
 # Optional SPAN auth utilities - enables automatic credential and CA cert management
 try:
-    from span_auth_utils import get_credentials, ensure_ca_cert
+    from span_auth_utils import get_panel_credentials, ensure_ca_cert
     SPAN_AUTH_AVAILABLE = True
 except ImportError:
     SPAN_AUTH_AVAILABLE = False
@@ -366,8 +366,9 @@ The controller will:
     if password is None:
         if SPAN_AUTH_AVAILABLE:
             try:
-                creds = get_credentials(args.serial_number)
-                password = creds.get('password')
+                creds = get_panel_credentials(args.serial_number)
+                if creds:
+                    password = creds.get('ebus_broker_password')
                 if password:
                     logger.info(f'Using password from ~/.span-auth.json')
                 else:
