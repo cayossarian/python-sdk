@@ -1318,6 +1318,7 @@ class Device:
         authentication_type = broker_authentication.get('type', 'NONE')
         use_tls = self._mqtt_cfg.get('use_tls', False)
         tls_ca_cert = self._mqtt_cfg.get('tls_ca_cert', None)
+        tls_ca_data = self._mqtt_cfg.get('tls_ca_data', None)
         tls_insecure = self._mqtt_cfg.get('tls_insecure', True)
         if authentication_type == USER_PASS_TYPE:
             username = broker_authentication.get('username', None)
@@ -1333,6 +1334,7 @@ class Device:
                                         port=broker_port,
                                         use_tls=use_tls,
                                         tls_ca_cert=tls_ca_cert,
+                                        tls_ca_data=tls_ca_data,
                                         tls_insecure=tls_insecure,
                                         lwt=lwt,
                                         on_connect_callback=partial(self.on_connect))
@@ -1344,6 +1346,7 @@ class Device:
                                         password=password,
                                         use_tls=use_tls,
                                         tls_ca_cert=tls_ca_cert,
+                                        tls_ca_data=tls_ca_data,
                                         tls_insecure=tls_insecure,
                                         lwt=lwt,
                                         on_connect_callback=partial(self.on_connect))
@@ -1493,6 +1496,7 @@ class Controller:
         authentication_type = broker_authentication.get('type', 'NONE')
         use_tls = self._mqtt_cfg.get('use_tls', False)
         tls_ca_cert = self._mqtt_cfg.get('tls_ca_cert', None)
+        tls_ca_data = self._mqtt_cfg.get('tls_ca_data', None)
         tls_insecure = self._mqtt_cfg.get('tls_insecure', True)
 
         if authentication_type == USER_PASS_TYPE:
@@ -1509,6 +1513,7 @@ class Controller:
                                        port=broker_port,
                                        use_tls=use_tls,
                                        tls_ca_cert=tls_ca_cert,
+                                       tls_ca_data=tls_ca_data,
                                        tls_insecure=tls_insecure,
                                        on_connect_callback=partial(self._on_connect))
             elif (authentication_type == USER_PASS_TYPE) and user_pass_valid:
@@ -1519,6 +1524,7 @@ class Controller:
                                        password=password,
                                        use_tls=use_tls,
                                        tls_ca_cert=tls_ca_cert,
+                                       tls_ca_data=tls_ca_data,
                                        tls_insecure=tls_insecure,
                                        on_connect_callback=partial(self._on_connect))
             else:

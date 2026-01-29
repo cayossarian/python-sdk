@@ -112,4 +112,5 @@ For MQTTS with CA certificate verification (secure mode):
 **TLS Options:**
 - `use_tls`: Enable TLS/SSL connection (required for port 8883)
 - `tls_ca_cert`: Path to CA certificate file for server verification
+- `tls_ca_data`: CA certificate content as PEM string or DER bytes (alternative to file)
 - `tls_insecure`: Skip certificate verification (default: true for backwards compatibility)

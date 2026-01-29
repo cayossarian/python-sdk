@@ -141,6 +141,7 @@ For MQTTS with CA certificate verification (secure mode):
 **TLS Options:**
 - `use_tls`: Enable TLS/SSL connection
 - `tls_ca_cert`: Path to CA certificate file for server verification (optional)
+- `tls_ca_data`: CA certificate content as PEM string or DER bytes (alternative to file)
 - `tls_insecure`: Skip certificate verification (default: true for backwards compatibility)
 
 When `tls_insecure` is true (or `tls_ca_cert` is not provided), the MqttClient uses TLS 1.2 with certificate verification disabled to support self-signed certificates. When `tls_ca_cert` is provided and `tls_insecure` is false, strict certificate verification is performed.

@@ -22,6 +22,7 @@ class MqttClient:
             password = None,
             use_tls: Optional[bool] = False,
             tls_ca_cert: Optional[str] = None,
+            tls_ca_data: Optional[Union[str, bytes]] = None,
             tls_insecure: Optional[bool] = True,
             v5: Optional[bool] = False,
             lwt: Optional[dict] = {},
@@ -70,14 +71,22 @@ class MqttClient:
         if username and password:
             self.mqttc.username_pw_set(username, password)
         if use_tls:
-            if tls_ca_cert and not tls_insecure:
+            if (tls_ca_cert or tls_ca_data) and not tls_insecure:
                 # Verify server certificate against provided CA cert
-                logging.info(f'reason=mqttClientTlsSecure,ca_cert={tls_ca_cert}')
-                self.mqttc.tls_set(
-                    ca_certs=tls_ca_cert,
-                    cert_reqs=ssl.CERT_REQUIRED,
-                    tls_version=ssl.PROTOCOL_TLS
-                )
+                if tls_ca_data:
+                    logging.info(f'reason=mqttClientTlsSecure,ca_data=provided')
+                    self.mqttc.tls_set(
+                        cadata=tls_ca_data,
+                        cert_reqs=ssl.CERT_REQUIRED,
+                        tls_version=ssl.PROTOCOL_TLS
+                    )
+                else:
+                    logging.info(f'reason=mqttClientTlsSecure,ca_cert={tls_ca_cert}')
+                    self.mqttc.tls_set(
+                        ca_certs=tls_ca_cert,
+                        cert_reqs=ssl.CERT_REQUIRED,
+                        tls_version=ssl.PROTOCOL_TLS
+                    )
                 self.mqttc.tls_insecure_set(False)
             else:
                 # Insecure mode - skip certificate verification
