@@ -4,11 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Python SDK implementing the Homie MQTT Convention (version 5) for eBus IoT devices. The SDK provides:
+This is a Python SDK (`ebus-sdk`) for the Electrification Bus (eBus) integration framework, implementing the Homie MQTT Convention (version 5). The SDK provides:
 - **Device role**: Framework for representing devices, nodes, and properties over MQTT
 - **Controller role**: Auto-discovery and interaction with Homie devices on an MQTT broker
 
-Follows the eBus MQTT Convention (https://github.com/spanio/eBus-MQTT-Convention).
+Links:
+- eBus: https://ebus.energy
+- Homie Convention: https://homieiot.github.io
+
+## Installation
+
+```bash
+pip install -e .  # Development (editable)
+pip install .     # Local install
+```
 
 ## Core Architecture
 
@@ -16,17 +25,17 @@ Follows the eBus MQTT Convention (https://github.com/spanio/eBus-MQTT-Convention
 
 The codebase implements a sophisticated three-layer property abstraction:
 
-1. **PythonProperty** (`property.py`): A lightweight property wrapper with callbacks
+1. **PythonProperty** (`src/ebus_sdk/property.py`): A lightweight property wrapper with callbacks
    - Thread-safe property value storage with change detection
    - Supports on_change and on_set callbacks
    - Can have an optional `entity_setter` for bidirectional control
 
-2. **GroupedPropertyDict** (`property.py`): Collection manager for organizing properties
+2. **GroupedPropertyDict** (`src/ebus_sdk/property.py`): Collection manager for organizing properties
    - Two-level dictionary: `groups -> property_id -> PythonProperty`
    - Thread-safe operations with observer pattern for bulk updates
    - Use `bulk_update()` context manager for efficient batch operations
 
-3. **Homie Property** (`homie.py`): MQTT-enabled properties following Homie convention
+3. **Homie Property** (`src/ebus_sdk/homie.py`): MQTT-enabled properties following Homie convention
    - Maps to `ebus/5/{device_id}/{node_id}/{property_id}` topics
    - Supports settable properties via `/set` topics
    - Handles retained messages and QoS levels
@@ -34,8 +43,8 @@ The codebase implements a sophisticated three-layer property abstraction:
 ### Device Hierarchy
 
 ```
-Device (homie.py)
-├── MQTT connection (MqttClient from mqtt.py)
+Device (src/ebus_sdk/homie.py)
+├── MQTT connection (MqttClient from src/ebus_sdk/mqtt.py)
 ├── State management (DeviceState: init, ready, disconnected, sleeping, lost)
 ├── $description attribute (JSON schema published on state transitions)
 └── Nodes
@@ -46,7 +55,7 @@ Device (homie.py)
 
 ### Adapter Pattern
 
-The `example-device.py` demonstrates the recommended adapter pattern:
+The `examples/simple-device` demonstrates the recommended adapter pattern:
 - **ExampleDevice**: Application-level device using PythonProperty/GroupedPropertyDict
 - **ExampleDeviceAdapter**: Bridges application properties to Homie/MQTT
 - Connect changes via `add_property_on_change_callback()` with `partial(set_homie_property_from_python_property, homie_property)`
@@ -83,7 +92,7 @@ Use convenience methods: `begin_state_transition()` and `end_state_transition()`
 ## Configuration
 
 ### MQTT Broker Configuration
-Broker configuration is loaded from JSON file specified by `EBUS_BROKER_CFG` environment variable (defaults to `broker-cfg.json`):
+Broker configuration is loaded from JSON file specified by `EBUS_BROKER_CFG` environment variable or `--config` command line option:
 
 ```json
 {
@@ -122,30 +131,18 @@ Note: When `use_tls` is true, the MqttClient uses TLS 1.2 with `tls_insecure_set
 
 ## Running Examples
 
-### Device Example
+Examples are in the `examples/` directory. See `examples/README.md` for details.
 
 ```bash
-# Run the example device adapter
-python3 example-device.py
+# Device example
+./examples/simple-device --config /path/to/broker-cfg.json
+
+# Controller example
+./examples/simple-controller --config /path/to/broker-cfg.json
+
+# SPAN Panel controller (requires zeroconf)
+./examples/simple-span-controller <serial-number> <password>
 ```
-
-The example creates:
-- A Homie device with ID `33A3D78A3D78`
-- An "environment" node with temperature, air-pressure, and humidity properties
-- MQTT topics published to `ebus/5/{device_id}/...`
-
-### Controller Example
-
-```bash
-# Run the example controller
-python3 example-controller.py
-```
-
-The controller will:
-- Auto-discover all Homie devices on the broker
-- Display device descriptions and property values
-- Monitor property changes in real-time
-- Show a summary every 30 seconds
 
 ## Important Implementation Notes
 
@@ -191,7 +188,7 @@ The SDK now includes a **Controller** class that implements the Homie controller
 
 ```python
 import json
-from homie import Controller
+from ebus_sdk import Controller
 
 # Load broker config
 with open('broker-cfg.json', 'r') as f:
@@ -251,16 +248,24 @@ From the codebase comments:
 
 ## File Organization
 
-- `homie.py`: Core Homie convention implementation
-  - `Device`, `Node`, `Property` classes (device role)
-  - `Controller`, `DiscoveredDevice` classes (controller role)
-  - Enums: `DeviceState`, `PropertyDatatype`, `Unit`
-- `property.py`: Application-level property abstractions (PythonProperty, GroupedPropertyDict)
-- `mqtt.py`: MQTT client wrapper around paho-mqtt
-- `example-device.py`: Reference device implementation showing adapter pattern
-- `example-controller.py`: Reference controller implementation showing device discovery
-- `broker-cfg.json`: MQTT broker connection configuration
-- `OLD/`: Previous iterations of implementation files
+```
+python-sdk/
+├── src/ebus_sdk/           # Package source
+│   ├── __init__.py         # Package exports
+│   ├── homie.py            # Core Homie convention implementation
+│   │                       #   Device, Node, Property (device role)
+│   │                       #   Controller, DiscoveredDevice (controller role)
+│   │                       #   Enums: DeviceState, PropertyDatatype, Unit
+│   ├── mqtt.py             # MQTT client wrapper around paho-mqtt
+│   └── property.py         # Application-level property abstractions
+├── examples/               # Example scripts
+│   ├── simple-device       # Device publishing sensor data
+│   ├── simple-controller   # Controller discovering devices
+│   └── simple-span-controller  # SPAN Panel controller with mDNS
+├── pyproject.toml          # Package configuration (pip install)
+├── README.md               # Package documentation
+└── CLAUDE.md               # This file
+```
 
 ## Homie Convention Specifics
 
