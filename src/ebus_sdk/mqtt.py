@@ -1,8 +1,16 @@
 import logging
+import os
 import ssl
 import paho.mqtt.client as mqtt
 import paho.mqtt.matcher as matcher
 from typing import Any, Callable, Optional, Union
+
+# Default broker configuration (can be overridden via environment variables)
+MQTT_DEFAULT_HOST = os.environ.get('EBUS_MQTT_HOST', '127.0.0.1')
+MQTT_DEFAULT_PORT = int(os.environ.get('EBUS_MQTT_PORT', '1883'))
+
+# Authentication types
+AUTH_TYPE_USER_PASS = 'USER_PASS'
 
 
 """
@@ -97,6 +105,65 @@ class MqttClient:
                 )
                 self.mqttc.tls_insecure_set(True)
         self.mqttc.connect(endpoint, port, keepalive=60)
+
+    @classmethod
+    def from_config(cls,
+                    mqtt_cfg: dict,
+                    client_id: str,
+                    callback: Callable[[Union[bytes, bytearray], Any], None] = None,
+                    lwt: Optional[dict] = None,
+                    on_connect_callback: Optional[Callable] = None) -> 'MqttClient':
+        """
+        Factory method to create MqttClient from a configuration dictionary.
+
+        Args:
+            mqtt_cfg: Configuration dictionary with keys:
+                - host: Broker hostname/IP (default: from EBUS_MQTT_HOST env or '127.0.0.1')
+                - port: Broker port (default: from EBUS_MQTT_PORT env or 1883)
+                - use_tls: Enable TLS (default: False)
+                - tls_ca_cert: Path to CA certificate file (optional)
+                - tls_ca_data: CA certificate content as PEM string or DER bytes (optional)
+                - tls_insecure: Skip certificate verification (default: True)
+                - authentication: Dict with 'type', 'username', 'password' (optional)
+            client_id: MQTT client identifier
+            callback: Message callback function (optional)
+            lwt: Last Will and Testament dict (optional)
+            on_connect_callback: Callback invoked on successful connection (optional)
+
+        Returns:
+            Configured MqttClient instance
+        """
+        endpoint = mqtt_cfg.get('host', MQTT_DEFAULT_HOST)
+        port = mqtt_cfg.get('port', MQTT_DEFAULT_PORT)
+        use_tls = mqtt_cfg.get('use_tls', False)
+        tls_ca_cert = mqtt_cfg.get('tls_ca_cert')
+        tls_ca_data = mqtt_cfg.get('tls_ca_data')
+        tls_insecure = mqtt_cfg.get('tls_insecure', True)
+
+        # Extract authentication credentials
+        username = None
+        password = None
+        auth = mqtt_cfg.get('authentication', {})
+        if auth.get('type') == AUTH_TYPE_USER_PASS:
+            username = auth.get('username')
+            password = auth.get('password')
+
+        logging.info(f'reason=mqttClientFromConfig,host={endpoint},port={port},useTls={use_tls},clientID={client_id}')
+
+        return cls(
+            client_id=client_id,
+            endpoint=endpoint,
+            port=port,
+            callback=callback,
+            username=username,
+            password=password,
+            use_tls=use_tls,
+            tls_ca_cert=tls_ca_cert,
+            tls_ca_data=tls_ca_data,
+            tls_insecure=tls_insecure,
+            lwt=lwt or {},
+            on_connect_callback=on_connect_callback
+        )
 
     def is_connected(self):
         """Check if MQTT client is connected"""

@@ -71,12 +71,6 @@ EBUS_HOMIE_MQTT_QOS = int(os.environ.get('EBUS_HOMIE_MQTT_QOS_SITE', EBUS_HOMIE_
 if EBUS_HOMIE_MQTT_QOS < 1:
     logger.warning(f'reason=homieQosLessThanOne,specifiedQos={EBUS_HOMIE_MQTT_QOS},defaultQos={EBUS_HOMIE_MQTT_QOS_DEFAULT}')
 
-#eBus MQTT broker constants
-EBUS_BROKER_DEFAULT_ENDPOINT = os.environ.get('PUBLIC_MQTT_ENDPOINT', '127.0.0.1')
-EBUS_BROKER_DEFAULT_PORT     = int(os.environ.get('PUBLIC_MQTT_PORT', '1885'))
-
-USER_PASS_TYPE = 'USER_PASS'
-
 # Helper character constants for units
 UNICODE_DEGREE         = '\u00b0'
 UNICODE_EXPONENT_3     = '\u00b3'
@@ -1304,53 +1298,21 @@ class Device:
 
     def connect_broker(self) -> None:
         """
-        Uses EBUS_BROKER_DEFAULT_ENDPOINT and EBUS_BROKER_DEFAULT_PORT if config file not specified
+        Connect to MQTT broker using configuration from mqtt_cfg.
         TODO: If device is a child, likely this needs to happen on the device's root!
         """
         if self.mqttc:
             # If we already have a mqtt client, don't reconnect...
             return
-        user_pass_valid = False
-        client_id = self._id
-        broker_endpoint = self._mqtt_cfg.get('host', EBUS_BROKER_DEFAULT_ENDPOINT)
-        broker_port = self._mqtt_cfg.get('port', EBUS_BROKER_DEFAULT_PORT)
-        broker_authentication = self._mqtt_cfg.get('authentication', {})
-        authentication_type = broker_authentication.get('type', 'NONE')
-        use_tls = self._mqtt_cfg.get('use_tls', False)
-        tls_ca_cert = self._mqtt_cfg.get('tls_ca_cert', None)
-        tls_ca_data = self._mqtt_cfg.get('tls_ca_data', None)
-        tls_insecure = self._mqtt_cfg.get('tls_insecure', True)
-        if authentication_type == USER_PASS_TYPE:
-            username = broker_authentication.get('username', None)
-            password = broker_authentication.get('password', None)
-            user_pass_valid = username and password
         lwt = {'topic': f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}/$state',
                'payload': DeviceState.LOST.value}
-        logger.info(f'reason=deviceConnectBroker,host={broker_endpoint},port={broker_port},authType={authentication_type},useTls={use_tls},clientID={client_id}')
         try:
-            if authentication_type == 'NONE':
-                self.mqttc = MqttClient(client_id=client_id,
-                                        endpoint=broker_endpoint,
-                                        port=broker_port,
-                                        use_tls=use_tls,
-                                        tls_ca_cert=tls_ca_cert,
-                                        tls_ca_data=tls_ca_data,
-                                        tls_insecure=tls_insecure,
-                                        lwt=lwt,
-                                        on_connect_callback=partial(self.on_connect))
-            elif (authentication_type == USER_PASS_TYPE) and user_pass_valid:
-                self.mqttc = MqttClient(client_id=client_id,
-                                        endpoint=broker_endpoint,
-                                        port=broker_port,
-                                        username=username,
-                                        password=password,
-                                        use_tls=use_tls,
-                                        tls_ca_cert=tls_ca_cert,
-                                        tls_ca_data=tls_ca_data,
-                                        tls_insecure=tls_insecure,
-                                        lwt=lwt,
-                                        on_connect_callback=partial(self.on_connect))
-            # TODO: Add additional authentication types here, e.g. certificate, OAuth2 token, etc.
+            self.mqttc = MqttClient.from_config(
+                mqtt_cfg=self._mqtt_cfg,
+                client_id=self._id,
+                lwt=lwt,
+                on_connect_callback=partial(self.on_connect)
+            )
         except Exception as e:
             logger.warning(f'reason=deviceConnectBrokerException,e={e}')
 
@@ -1358,8 +1320,9 @@ def ebus_cfg_add_auth(cfg, username, password):
     """
     Add authentication to the config dictionary
     """
+    from .mqtt import AUTH_TYPE_USER_PASS
     cfg['authentication'] = {
-        "type": USER_PASS_TYPE,
+        "type": AUTH_TYPE_USER_PASS,
         "username": username,
         "password": password
     }
@@ -1488,52 +1451,15 @@ class Controller:
         if self.mqttc:
             return
 
-        user_pass_valid = False
         client_id = f'homie-controller-{uuid.uuid4()}'
-        broker_endpoint = self._mqtt_cfg.get('host', EBUS_BROKER_DEFAULT_ENDPOINT)
-        broker_port = self._mqtt_cfg.get('port', EBUS_BROKER_DEFAULT_PORT)
-        broker_authentication = self._mqtt_cfg.get('authentication', {})
-        authentication_type = broker_authentication.get('type', 'NONE')
-        use_tls = self._mqtt_cfg.get('use_tls', False)
-        tls_ca_cert = self._mqtt_cfg.get('tls_ca_cert', None)
-        tls_ca_data = self._mqtt_cfg.get('tls_ca_data', None)
-        tls_insecure = self._mqtt_cfg.get('tls_insecure', True)
-
-        if authentication_type == USER_PASS_TYPE:
-            username = broker_authentication.get('username', None)
-            password = broker_authentication.get('password', None)
-            user_pass_valid = username and password
-
-        logger.info(f'reason=controllerConnectBroker,host={broker_endpoint},port={broker_port},authType={authentication_type},useTls={use_tls},clientID={client_id}')
-
         try:
-            if authentication_type == 'NONE':
-                self.mqttc = MqttClient(client_id=client_id,
-                                       endpoint=broker_endpoint,
-                                       port=broker_port,
-                                       use_tls=use_tls,
-                                       tls_ca_cert=tls_ca_cert,
-                                       tls_ca_data=tls_ca_data,
-                                       tls_insecure=tls_insecure,
-                                       on_connect_callback=partial(self._on_connect))
-            elif (authentication_type == USER_PASS_TYPE) and user_pass_valid:
-                self.mqttc = MqttClient(client_id=client_id,
-                                       endpoint=broker_endpoint,
-                                       port=broker_port,
-                                       username=username,
-                                       password=password,
-                                       use_tls=use_tls,
-                                       tls_ca_cert=tls_ca_cert,
-                                       tls_ca_data=tls_ca_data,
-                                       tls_insecure=tls_insecure,
-                                       on_connect_callback=partial(self._on_connect))
-            else:
-                logger.exception(f'reason=controllerConnectException,authType={authentication_type}')
-                return
-
+            self.mqttc = MqttClient.from_config(
+                mqtt_cfg=self._mqtt_cfg,
+                client_id=client_id,
+                on_connect_callback=partial(self._on_connect)
+            )
             self.mqttc.start(blocking=False)
             logger.info(f'reason=controllerConnected,clientID={client_id}')
-
         except Exception as e:
             logger.exception(f'reason=controllerConnectException,error={e}')
 
