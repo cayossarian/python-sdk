@@ -21,7 +21,7 @@ import sys
 import time
 from pprint import pprint
 
-from homie import Controller, DiscoveredDevice
+from ebus_sdk import Controller, DiscoveredDevice
 
 # Configure logging
 logging.basicConfig(

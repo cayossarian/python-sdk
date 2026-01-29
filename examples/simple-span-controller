@@ -32,7 +32,7 @@ from typing import Optional
 
 from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 
-from homie import Controller, DiscoveredDevice
+from ebus_sdk import Controller, DiscoveredDevice
 
 # Configure logging
 logging.basicConfig(

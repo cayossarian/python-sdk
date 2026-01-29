@@ -11,14 +11,12 @@ import collections
 import threading
 import sys
 import uuid
-import homie as homie
-from homie import EBUS_HOMIE_DOMAIN, EBUS_HOMIE_VERSION_MAJOR, DeviceState, PropertyDatatype, Unit
-from functools import cached_property, partial, reduce
-from typing import List, Dict, Union, Callable, Optional, Any
-from enum import Enum
-# Workaround due to non-support of StrEnum in current Gen2 FW Python, StrEnum available in enum, remove
-from mqtt import MqttClient
-from property import PythonProperty, GroupedPropertyDict
+from ebus_sdk import Device, Node, Property, DeviceState, PropertyDatatype, Unit
+from ebus_sdk import PythonProperty, GroupedPropertyDict
+from ebus_sdk import homie  # For datatype_from_type and constants
+from ebus_sdk.homie import EBUS_HOMIE_DOMAIN, EBUS_HOMIE_VERSION_MAJOR
+from functools import partial
+from typing import List, Dict, Callable, Optional, Any
 # TODO debug only, remove
 from pprint import pp, pformat
 

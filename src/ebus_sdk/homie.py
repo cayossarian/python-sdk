@@ -52,7 +52,7 @@ except ImportError:
 from functools import partial
 # from deprecated import deprecated
 from typing import Any, Callable, List, Optional, Union
-from mqtt import MqttClient
+from .mqtt import MqttClient
 
 # FIXME debug only?
 from pprint import pp, pformat
