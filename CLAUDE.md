@@ -107,7 +107,7 @@ Broker configuration is loaded from JSON file specified by `EBUS_BROKER_CFG` env
 }
 ```
 
-For MQTTS connections (TLS/SSL):
+For MQTTS connections (TLS/SSL) with insecure mode (default):
 ```json
 {
   "host": "span-panel.local",
@@ -117,11 +117,33 @@ For MQTTS connections (TLS/SSL):
     "username": "panel-serial-number",
     "password": "mqtt-password"
   },
-  "use_tls": true
+  "use_tls": true,
+  "tls_insecure": true
 }
 ```
 
-Note: When `use_tls` is true, the MqttClient uses TLS 1.2 with `tls_insecure_set(True)` to support self-signed certificates.
+For MQTTS with CA certificate verification (secure mode):
+```json
+{
+  "host": "span-panel.local",
+  "port": 8883,
+  "authentication": {
+    "type": "USER_PASS",
+    "username": "panel-serial-number",
+    "password": "mqtt-password"
+  },
+  "use_tls": true,
+  "tls_ca_cert": "/path/to/ca-cert.crt",
+  "tls_insecure": false
+}
+```
+
+**TLS Options:**
+- `use_tls`: Enable TLS/SSL connection
+- `tls_ca_cert`: Path to CA certificate file for server verification (optional)
+- `tls_insecure`: Skip certificate verification (default: true for backwards compatibility)
+
+When `tls_insecure` is true (or `tls_ca_cert` is not provided), the MqttClient uses TLS 1.2 with certificate verification disabled to support self-signed certificates. When `tls_ca_cert` is provided and `tls_insecure` is false, strict certificate verification is performed.
 
 ### Environment Variables
 - `EBUS_BROKER_CFG`: Path to broker configuration JSON file
@@ -142,6 +164,10 @@ Examples are in the `examples/` directory. See `examples/README.md` for details.
 
 # SPAN Panel controller (requires zeroconf)
 ./examples/simple-span-controller <serial-number> <password>
+
+# With SPAN-API utilities (automatic credentials)
+export PYTHONPATH=$PYTHONPATH:~/projects/span.io/span/repo/SPAN-API/lib
+./examples/simple-span-controller <serial-number>
 ```
 
 ## Important Implementation Notes

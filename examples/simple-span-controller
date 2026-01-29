@@ -34,6 +34,13 @@ from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 
 from ebus_sdk import Controller, DiscoveredDevice
 
+# Optional SPAN auth utilities - enables automatic credential and CA cert management
+try:
+    from span_auth_utils import get_credentials, ensure_ca_cert
+    SPAN_AUTH_AVAILABLE = True
+except ImportError:
+    SPAN_AUTH_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -125,7 +132,8 @@ class TargetedController:
     """
 
     def __init__(self, target_device_id: str, serial_number: str, password: str,
-                 broker_host: Optional[str] = None, broker_port: int = 8883):
+                 broker_host: Optional[str] = None, broker_port: int = 8883,
+                 tls_ca_cert: Optional[str] = None, tls_insecure: bool = True):
         self.target_device_id = target_device_id
         self.target_found = False
         self.serial_number = serial_number
@@ -148,7 +156,6 @@ class TargetedController:
             logger.info(f'Using specified broker host: {broker_host}:{broker_port}')
 
         # Build MQTT configuration for MQTTS with authentication
-        # Note: Controller expects authentication in nested structure
         mqtt_cfg = {
             'host': broker_host,
             'port': broker_port,
@@ -157,8 +164,11 @@ class TargetedController:
                 'username': serial_number,
                 'password': password
             },
-            'use_tls': True  # Enable MQTTS with TLS (insecure mode for self-signed cert)
+            'use_tls': True,
+            'tls_insecure': tls_insecure
         }
+        if tls_ca_cert:
+            mqtt_cfg['tls_ca_cert'] = tls_ca_cert
 
         logger.info(f'Connecting to MQTTS broker at {mqtt_cfg["host"]}:{mqtt_cfg["port"]}')
         logger.info(f'Username: {serial_number}')
@@ -323,8 +333,8 @@ The controller will:
     parser.add_argument('serial_number',
                        help='SPAN Panel serial number (e.g., nt-2204-c1c46)')
 
-    parser.add_argument('password',
-                       help='MQTT broker password for authentication')
+    parser.add_argument('password', nargs='?', default=None,
+                       help='MQTT broker password (optional if span_auth_utils available)')
 
     parser.add_argument('--device-id',
                        help='Device ID to monitor (default: same as serial_number)')
@@ -334,6 +344,9 @@ The controller will:
 
     parser.add_argument('--broker-port', type=int, default=8883,
                        help='MQTT broker port (default: 8883)')
+
+    parser.add_argument('--insecure', action='store_true',
+                       help='Skip TLS certificate verification (default if no CA cert available)')
 
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug logging')
@@ -347,6 +360,52 @@ The controller will:
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
         logger.setLevel(logging.DEBUG)
+
+    # Get password - from CLI arg or from span_auth_utils if available
+    password = args.password
+    if password is None:
+        if SPAN_AUTH_AVAILABLE:
+            try:
+                creds = get_credentials(args.serial_number)
+                password = creds.get('password')
+                if password:
+                    logger.info(f'Using password from ~/.span-auth.json')
+                else:
+                    logger.error(f'No password found in ~/.span-auth.json for {args.serial_number}')
+                    print(f'Error: No password provided and none found in ~/.span-auth.json')
+                    print(f'Provide password as argument or run: span-api auth {args.serial_number}')
+                    return
+            except Exception as e:
+                logger.error(f'Failed to get credentials: {e}')
+                print(f'Error: No password provided and failed to get from ~/.span-auth.json: {e}')
+                return
+        else:
+            print('Error: Password is required when span_auth_utils is not available')
+            print('Usage: simple-span-controller <serial-number> <password>')
+            print('')
+            print('To enable automatic credential management, add SPAN-API lib to PYTHONPATH:')
+            print('  export PYTHONPATH=$PYTHONPATH:~/projects/span.io/span/repo/SPAN-API/lib')
+            return
+
+    # Get CA cert if available and not insecure mode
+    tls_ca_cert = None
+    tls_insecure = args.insecure
+    if SPAN_AUTH_AVAILABLE and not args.insecure:
+        try:
+            # Determine hostname for CA cert
+            hostname = args.broker_host if args.broker_host else f'span-{args.serial_number}.local'
+            tls_ca_cert = ensure_ca_cert(args.serial_number, hostname)
+            if tls_ca_cert:
+                logger.info(f'Using CA cert: {tls_ca_cert}')
+                tls_insecure = False
+            else:
+                logger.warning('No CA cert available, using insecure mode')
+                tls_insecure = True
+        except Exception as e:
+            logger.warning(f'Failed to get CA cert, using insecure mode: {e}')
+            tls_insecure = True
+    else:
+        tls_insecure = True
 
     print('=' * 70)
     print('Targeted Homie Controller with mDNS Discovery and MQTTS')
@@ -362,6 +421,10 @@ The controller will:
         print(f'Broker: {args.broker_host}:{args.broker_port}')
     else:
         print(f'Broker: Auto-discover via mDNS')
+    if tls_ca_cert:
+        print(f'TLS: Secure (CA cert verification)')
+    else:
+        print(f'TLS: Insecure (no certificate verification)')
     print('=' * 70)
     print()
 
@@ -369,9 +432,11 @@ The controller will:
     controller = TargetedController(
         device_id,
         args.serial_number,
-        args.password,
+        password,
         broker_host=args.broker_host,
-        broker_port=args.broker_port
+        broker_port=args.broker_port,
+        tls_ca_cert=tls_ca_cert,
+        tls_insecure=tls_insecure
     )
     controller.start()
 

@@ -1316,28 +1316,37 @@ class Device:
         broker_port = self._mqtt_cfg.get('port', EBUS_BROKER_DEFAULT_PORT)
         broker_authentication = self._mqtt_cfg.get('authentication', {})
         authentication_type = broker_authentication.get('type', 'NONE')
+        use_tls = self._mqtt_cfg.get('use_tls', False)
+        tls_ca_cert = self._mqtt_cfg.get('tls_ca_cert', None)
+        tls_insecure = self._mqtt_cfg.get('tls_insecure', True)
         if authentication_type == USER_PASS_TYPE:
             username = broker_authentication.get('username', None)
             password = broker_authentication.get('password', None)
             user_pass_valid = username and password
         lwt = {'topic': f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}/$state',
                'payload': DeviceState.LOST.value}
-        logger.info(f'reason=deviceConnectBroker,host={broker_endpoint},port={broker_port},authType={authentication_type},clientID={client_id}')
+        logger.info(f'reason=deviceConnectBroker,host={broker_endpoint},port={broker_port},authType={authentication_type},useTls={use_tls},clientID={client_id}')
         try:
             if authentication_type == 'NONE':
                 self.mqttc = MqttClient(client_id=client_id,
                                         endpoint=broker_endpoint,
                                         port=broker_port,
+                                        use_tls=use_tls,
+                                        tls_ca_cert=tls_ca_cert,
+                                        tls_insecure=tls_insecure,
                                         lwt=lwt,
-                                        on_connect_callback = partial(self.on_connect))
+                                        on_connect_callback=partial(self.on_connect))
             elif (authentication_type == USER_PASS_TYPE) and user_pass_valid:
                 self.mqttc = MqttClient(client_id=client_id,
                                         endpoint=broker_endpoint,
                                         port=broker_port,
                                         username=username,
                                         password=password,
+                                        use_tls=use_tls,
+                                        tls_ca_cert=tls_ca_cert,
+                                        tls_insecure=tls_insecure,
                                         lwt=lwt,
-                                        on_connect_callback = partial(self.on_connect))
+                                        on_connect_callback=partial(self.on_connect))
             # TODO: Add additional authentication types here, e.g. certificate, OAuth2 token, etc.
         except Exception as e:
             logger.warning(f'reason=deviceConnectBrokerException,e={e}')
@@ -1483,6 +1492,8 @@ class Controller:
         broker_authentication = self._mqtt_cfg.get('authentication', {})
         authentication_type = broker_authentication.get('type', 'NONE')
         use_tls = self._mqtt_cfg.get('use_tls', False)
+        tls_ca_cert = self._mqtt_cfg.get('tls_ca_cert', None)
+        tls_insecure = self._mqtt_cfg.get('tls_insecure', True)
 
         if authentication_type == USER_PASS_TYPE:
             username = broker_authentication.get('username', None)
@@ -1497,6 +1508,8 @@ class Controller:
                                        endpoint=broker_endpoint,
                                        port=broker_port,
                                        use_tls=use_tls,
+                                       tls_ca_cert=tls_ca_cert,
+                                       tls_insecure=tls_insecure,
                                        on_connect_callback=partial(self._on_connect))
             elif (authentication_type == USER_PASS_TYPE) and user_pass_valid:
                 self.mqttc = MqttClient(client_id=client_id,
@@ -1505,6 +1518,8 @@ class Controller:
                                        username=username,
                                        password=password,
                                        use_tls=use_tls,
+                                       tls_ca_cert=tls_ca_cert,
+                                       tls_insecure=tls_insecure,
                                        on_connect_callback=partial(self._on_connect))
             else:
                 logger.exception(f'reason=controllerConnectException,authType={authentication_type}')

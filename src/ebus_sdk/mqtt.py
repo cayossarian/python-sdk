@@ -21,6 +21,8 @@ class MqttClient:
             username = None,
             password = None,
             use_tls: Optional[bool] = False,
+            tls_ca_cert: Optional[str] = None,
+            tls_insecure: Optional[bool] = True,
             v5: Optional[bool] = False,
             lwt: Optional[dict] = {},
             on_connect_callback: Optional[Callable] = None
@@ -68,16 +70,23 @@ class MqttClient:
         if username and password:
             self.mqttc.username_pw_set(username, password)
         if use_tls:
-            logging.info(f'reason=mqttClientTls')
-            # TODO: be able to support either secure or insecure
-            # For self-signed certificates, disable certificate verification
-            # cert_reqs=ssl.CERT_NONE disables certificate verification entirely
-            self.mqttc.tls_set(
-                cert_reqs=ssl.CERT_NONE,
-                tls_version=ssl.PROTOCOL_TLSv1_2
-            )
-            # tls_insecure_set disables hostname verification (in addition to cert verification)
-            self.mqttc.tls_insecure_set(True)
+            if tls_ca_cert and not tls_insecure:
+                # Verify server certificate against provided CA cert
+                logging.info(f'reason=mqttClientTlsSecure,ca_cert={tls_ca_cert}')
+                self.mqttc.tls_set(
+                    ca_certs=tls_ca_cert,
+                    cert_reqs=ssl.CERT_REQUIRED,
+                    tls_version=ssl.PROTOCOL_TLS
+                )
+                self.mqttc.tls_insecure_set(False)
+            else:
+                # Insecure mode - skip certificate verification
+                logging.info(f'reason=mqttClientTlsInsecure')
+                self.mqttc.tls_set(
+                    cert_reqs=ssl.CERT_NONE,
+                    tls_version=ssl.PROTOCOL_TLSv1_2
+                )
+                self.mqttc.tls_insecure_set(True)
         self.mqttc.connect(endpoint, port, keepalive=60)
 
     def is_connected(self):
