@@ -29,7 +29,7 @@ from .homie import (
 
 # Property abstractions
 from .property import (
-    PythonProperty,
+    Property as ObservableProperty,
     GroupedPropertyDict,
     PropertyDict,
     ChangeEvent,
@@ -57,7 +57,7 @@ __all__ = [
     "datatype_from_type",
     "ebus_cfg_add_auth",
     # Property abstractions
-    "PythonProperty",
+    "ObservableProperty",
     "GroupedPropertyDict",
     "PropertyDict",
     "ChangeEvent",

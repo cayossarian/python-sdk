@@ -12,7 +12,7 @@ import threading
 import sys
 import uuid
 from ebus_sdk import Device, Node, Property, DeviceState, PropertyDatatype, Unit
-from ebus_sdk import PythonProperty, GroupedPropertyDict
+from ebus_sdk.property import Property, GroupedPropertyDict
 from ebus_sdk import homie  # For datatype_from_type and constants
 from ebus_sdk.homie import EBUS_HOMIE_DOMAIN, EBUS_HOMIE_VERSION_MAJOR
 from functools import partial
@@ -52,12 +52,12 @@ class ExampleDevice():
         for property_dict in properties:
             self._props.add_property_from_dict('sensors', property_dict)
 
-    def get_property(self, group: str, property_id: str) -> PythonProperty:
+    def get_property(self, group: str, property_id: str) -> Property:
         return self._props.get(group, property_id)
 
     def add_property_on_change_callback(self, group: str, id: str, callback: Callable) -> uuid.UUID:
         """
-        Adds a callback to the PythonProperty group.id, that will be called when the PythonProperty's value changes
+        Adds a callback to the Property group.id, that will be called when the Property's value changes
         Returns a callback_id (a uuid1) that can be used subsequently to remove the callback
         """
         return self._props.add_property_on_change_callback(group, id, callback)
@@ -66,14 +66,15 @@ class ExampleDevice():
         return self._props.as_dict()
 
 
-def set_homie_property_from_python_property(homie_property: homie.Property,
-                                            python_property: PythonProperty) -> bool:
+def set_homie_property_from_property(homie_property: homie.Property,
+                                     prop: Property) -> bool:
     """
-    Used as a callback for a PythonProperty
-    The PythonProperty's callback returns the PythonProperty,
-    and this function sets the homie.Property's value to the value of the PythonProperty
+    Used as a callback for a Property.
+
+    The Property's callback returns the Property,
+    and this function sets the homie.Property's value to the value of the Property.
     """
-    return homie_property.set_value(python_property.value())
+    return homie_property.set_value(prop.value())
 
 
 class ExampleDeviceAdapter():
@@ -180,7 +181,7 @@ class ExampleDeviceAdapter():
             homie_property = homie_node.add_property_from_dict(property_dict)
             self._example_device.add_property_on_change_callback(group,
                                                                  py_property_id,
-                                                                 partial(set_homie_property_from_python_property,
+                                                                 partial(set_homie_property_from_property,
                                                                          homie_property))
         return homie_node
 

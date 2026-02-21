@@ -37,11 +37,11 @@ pip install ebus-sdk[mdns]
 
 **With SPAN-API utilities (automatic credentials and CA cert):**
 
-If you have access to the SPAN-API repository, you can enable automatic credential and certificate management:
+If you have access to the SPAN-API-Client-Docs repository, you can enable automatic credential and certificate management:
 
 ```bash
-# Add SPAN-API lib to PYTHONPATH
-export PYTHONPATH=$PYTHONPATH:~/projects/span.io/span/repo/SPAN-API/lib
+# Add SPAN-API-Client-Docs lib to PYTHONPATH
+export PYTHONPATH=$PYTHONPATH:/path/to/SPAN-API-Client-Docs/lib
 
 # Run without password - uses ~/.span-auth.json
 ./simple-span-controller <serial-number>

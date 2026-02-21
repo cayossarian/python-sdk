@@ -384,8 +384,8 @@ The controller will:
             print('Error: Password is required when span_auth_utils is not available')
             print('Usage: simple-span-controller <serial-number> <password>')
             print('')
-            print('To enable automatic credential management, add SPAN-API lib to PYTHONPATH:')
-            print('  export PYTHONPATH=$PYTHONPATH:~/projects/span.io/span/repo/SPAN-API/lib')
+            print('To enable automatic credential management, add SPAN-API-Client-Docs lib to PYTHONPATH:')
+            print('  export PYTHONPATH=$PYTHONPATH:/path/to/SPAN-API-Client-Docs/lib')
             return
 
     # Get CA cert if available and not insecure mode

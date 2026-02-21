@@ -93,7 +93,7 @@ Core Homie convention implementation:
 
 Application-level property abstractions for bridging application state to Homie:
 
-- **PythonProperty** - Thread-safe property with change callbacks
+- **Property** - Thread-safe observable property with change callbacks
 - **GroupedPropertyDict** - Two-level dictionary organizing properties by group
 - **PropertyDict** - Simple property dictionary
 - **ChangeEvent** - Enum for property change event types

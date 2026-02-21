@@ -4,7 +4,6 @@ from __future__ import annotations
 """
 Classes and Enums to support Homie (version 5)
 
-   https://github.com/spanio/eBus-MQTT-Convention
    https://github.com/homieiot/convention
    https://homieiot.github.io
    https://homieiot.github.io/specification/
@@ -14,7 +13,7 @@ Support for Homie "clients" is TBD/future-work, e.g. discovery, etc.
 
 This is the initial version, there are things to add in the future (as needed):
 * Make getting and setting a property's value thread-safe, and add thread-safety throughout
-* Support for child devices [https://spanio.atlassian.net/browse/SAS-3547]
+* Support for child devices
     Likely there will be a need to share the MQTT connection between parent and child devices, TBD how
 * Support for the target attribute for Properties
 * Graceful removal of a Device, including its Nodes and their Properties
@@ -176,7 +175,6 @@ class Property:
     """
     Object representing a Homie MQTT Property
     https://homieiot.github.io/specification/
-    https://github.com/spanio/ebus-mqtt-convention/blob/main/CONVENTION.md
     Note that device and node are NOT overwritten if they exist
     Question: Should we subclass per datatype???
     TODO: Should device_id come from Node -> Device -> id?
@@ -613,7 +611,6 @@ class Node:
     """
     Object representing a Homie MQTT Node
     https://homieiot.github.io/specification/
-    https://github.com/spanio/ebus-mqtt-convention/blob/main/CONVENTION.md
     """
     def __init__(self,
                  id: Optional[str] = None,
@@ -833,7 +830,6 @@ class Device:
     """
     Object representing a Homie MQTT Device
     https://homieiot.github.io/specification/
-    https://github.com/spanio/ebus-mqtt-convention/blob/main/CONVENTION.md
     TODO: Child devices might (or must?) use the root's MQTT client
 
     mqtt_cfg is a dict, two examples:
@@ -976,7 +972,6 @@ class Device:
     def description(self) -> dict:
         """
         Returns a dict of the $description attribute of the Device
-        https://github.com/spanio/ebus-mqtt-convention/blob/main/CONVENTION.md
         """
         logger.info(f'reason=deviceDescriptionEntered,id={self._id}')
         description = dict()
