@@ -14,7 +14,6 @@ from ebus_sdk.homie import (
     EBUS_HOMIE_MQTT_QOS,
 )
 
-
 # ── DiscoveredDevice ─────────────────────────────────────────────────────
 
 
@@ -83,9 +82,7 @@ class TestDiscoveredDevice:
             "nodes": {
                 "core": {
                     "name": "Core",
-                    "properties": {
-                        "active-power": {"datatype": "float", "unit": "W"}
-                    },
+                    "properties": {"active-power": {"datatype": "float", "unit": "W"}},
                 }
             }
         }
@@ -273,7 +270,9 @@ class TestControllerDiscoverySingleDevice:
             topic = c[0][0]
             parts = topic.split("/")
             # parts[2] is the device-id position
-            assert parts[2] == "panel-1", f"Wildcard found in device-id position: {topic}"
+            assert (
+                parts[2] == "panel-1"
+            ), f"Wildcard found in device-id position: {topic}"
 
 
 class TestControllerPropertyMessages:
@@ -329,9 +328,7 @@ class TestControllerPropertyMessages:
     def test_property_skips_dollar_attributes(self, mock_paho):
         ctrl, _ = _make_controller(mock_paho)
         changes = []
-        ctrl.set_on_property_changed_callback(
-            lambda *args: changes.append(args)
-        )
+        ctrl.set_on_property_changed_callback(lambda *args: changes.append(args))
         ctrl.start_discovery()
 
         ctrl._on_state_message(
@@ -374,7 +371,9 @@ class TestControllerSetProperty:
         result = ctrl.set_property("panel-1", "breaker", "state", "CLOSED")
 
         assert result is True
-        expected_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/breaker/state/set"
+        expected_topic = (
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/breaker/state/set"
+        )
         mock_client.publish.assert_called_once_with(
             expected_topic, "CLOSED", qos=EBUS_HOMIE_MQTT_QOS, retain=False
         )
@@ -394,7 +393,9 @@ class TestControllerBroadcast:
         result = ctrl.broadcast("alert", "test-message")
 
         assert result is True
-        expected_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/$broadcast/alert"
+        expected_topic = (
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/$broadcast/alert"
+        )
         mock_client.publish.assert_called_once_with(
             expected_topic, "test-message", qos=EBUS_HOMIE_MQTT_QOS, retain=False
         )
@@ -467,3 +468,98 @@ class TestControllerStop:
         # Mutating the copy shouldn't affect the controller
         all_devs.pop("panel-1")
         assert "panel-1" in ctrl.devices
+
+
+# ── Controller QoS ────────────────────────────────────────────────────────
+
+
+def _make_controller_with_qos(mock_paho, qos, device_id=None):
+    """Helper to create a Controller with a custom QoS and mocked MQTT."""
+    with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
+        mock_client = MagicMock()
+        mock_client.sub_callbacks = {}
+        mock_from_config.return_value = mock_client
+
+        ctrl = Controller(
+            mqtt_cfg={"host": "localhost", "port": 1883},
+            device_id=device_id,
+            qos=qos,
+        )
+        return ctrl, mock_client
+
+
+class TestControllerQoS:
+    """Test client-settable QoS on Controller."""
+
+    def test_qos_defaults_to_global(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho)
+        assert ctrl.qos == EBUS_HOMIE_MQTT_QOS
+
+    def test_qos_property_returns_custom_value(self, mock_paho):
+        ctrl, _ = _make_controller_with_qos(mock_paho, qos=1)
+        assert ctrl.qos == 1
+
+    def test_wildcard_subscribe_uses_custom_qos(self, mock_paho):
+        ctrl, mock_client = _make_controller_with_qos(mock_paho, qos=0)
+        ctrl.start_discovery()
+
+        mock_client.subscribe.assert_called_once()
+        _, kwargs = mock_client.subscribe.call_args
+        assert kwargs["qos"] == 0
+
+    def test_single_device_subscribe_uses_custom_qos(self, mock_paho):
+        ctrl, mock_client = _make_controller_with_qos(
+            mock_paho, qos=1, device_id="panel-1"
+        )
+        ctrl.start_discovery()
+
+        assert mock_client.subscribe.call_count == 4
+        for c in mock_client.subscribe.call_args_list:
+            _, kwargs = c
+            assert kwargs["qos"] == 1
+
+    def test_set_property_uses_controller_qos_by_default(self, mock_paho):
+        ctrl, mock_client = _make_controller_with_qos(mock_paho, qos=1)
+
+        ctrl.set_property("panel-1", "breaker", "state", "CLOSED")
+
+        _, kwargs = mock_client.publish.call_args
+        assert kwargs["qos"] == 1
+
+    def test_set_property_allows_qos_override(self, mock_paho):
+        ctrl, mock_client = _make_controller_with_qos(mock_paho, qos=1)
+
+        ctrl.set_property("panel-1", "breaker", "state", "CLOSED", qos=0)
+
+        _, kwargs = mock_client.publish.call_args
+        assert kwargs["qos"] == 0
+
+    def test_broadcast_uses_controller_qos_by_default(self, mock_paho):
+        ctrl, mock_client = _make_controller_with_qos(mock_paho, qos=1)
+
+        ctrl.broadcast("alert", "test-message")
+
+        _, kwargs = mock_client.publish.call_args
+        assert kwargs["qos"] == 1
+
+    def test_broadcast_allows_qos_override(self, mock_paho):
+        ctrl, mock_client = _make_controller_with_qos(mock_paho, qos=1)
+
+        ctrl.broadcast("alert", "test-message", qos=0)
+
+        _, kwargs = mock_client.publish.call_args
+        assert kwargs["qos"] == 0
+
+    def test_subscribe_to_device_uses_custom_qos(self, mock_paho):
+        """Verify _subscribe_to_device (wildcard re-subscribe on new device) uses controller QoS."""
+        ctrl, mock_client = _make_controller_with_qos(mock_paho, qos=1)
+        ctrl.start_discovery()
+        mock_client.subscribe.reset_mock()
+
+        # Simulate discovering a new device in wildcard mode
+        ctrl._subscribe_to_device("panel-2")
+
+        assert mock_client.subscribe.call_count == 3
+        for c in mock_client.subscribe.call_args_list:
+            _, kwargs = c
+            assert kwargs["qos"] == 1

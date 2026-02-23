@@ -250,6 +250,8 @@ class Property:
         self._node = node
         self._device = device
         self.async_loop = async_loop
+        # QoS for MQTT operations (may be overridden by Device when adopted)
+        self._qos = EBUS_HOMIE_MQTT_QOS
         # Track whether this property has ever been published (FIX for MQTT topic persistence)
         self._ever_published = False
         self._initial_value_was_none = value is None
@@ -503,7 +505,7 @@ class Property:
             logger.debug(
                 f"reason=propertyPublishValue,value={value},topic={topic},retained={self.retained()}"
             )
-            mqttc.publish(topic, value, retain=self.retained(), qos=EBUS_HOMIE_MQTT_QOS)
+            mqttc.publish(topic, value, retain=self.retained(), qos=self._qos)
             self._ever_published = True  # FIX: Mark as published
             self._skip_initial_publish = (
                 False  # FIX: Clear skip flag after first publish
@@ -540,7 +542,7 @@ class Property:
         topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}"
         try:
             # Publishing empty string clears retained message
-            mqttc.publish(topic, "", retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+            mqttc.publish(topic, "", retain=True, qos=self._qos)
             logger.info(
                 f"reason=propertyClearedValue,propertyID={self._id},topic={topic}"
             )
@@ -664,7 +666,7 @@ class Property:
         topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}/set"
         try:
             mqttc.subscribe(
-                topic, param=partial(self._settable_callback), qos=EBUS_HOMIE_MQTT_QOS
+                topic, param=partial(self._settable_callback), qos=self._qos
             )
         except Exception as e:
             logger.warning(f"reason=propertySetSubscribeSubscribeException,e={e}")
@@ -766,6 +768,9 @@ class Node:
         """
         if not property.node():
             property.set_node(self)
+        # Propagate QoS from device if available
+        if self._device and hasattr(self._device, "_qos"):
+            property._qos = self._device._qos
         # Note set_subscribe() checks if property is settable...
         property.set_subscribe()
         # Add property to dictionary BEFORE publishing description
@@ -942,10 +947,12 @@ class Device:
         nodes: Optional[List] = [],
         extensions: Optional[List] = [],
         mqtt_cfg: Optional[dict] = {},
+        qos: int = EBUS_HOMIE_MQTT_QOS,
     ):
         # Basic initialization
         self.mqttc = None
         self._state = None
+        self._qos = qos
         # Store the arguments
         self._id = id
         if name:
@@ -1042,6 +1049,11 @@ class Device:
         Returns list of Device's extensions
         """
         return self._extensions
+
+    @property
+    def qos(self) -> int:
+        """Returns the MQTT QoS level for this device"""
+        return self._qos
 
     def nodes(self) -> dict:
         """
@@ -1151,6 +1163,9 @@ class Device:
         """
         if not node.device():
             node.set_device(self)
+        # Propagate device QoS to all properties in this node
+        for prop in node.properties().values():
+            prop._qos = self._qos
         node_id = node.id()
         self._nodes.update({node_id: node})
         node.publish()
@@ -1234,7 +1249,7 @@ class Device:
                         prop_topic = f"{base_topic}/{node_id}/{prop_id}"
                         try:
                             self.mqttc.publish(
-                                prop_topic, "", retain=True, qos=EBUS_HOMIE_MQTT_QOS
+                                prop_topic, "", retain=True, qos=self._qos
                             )
                             logger.debug(f"reason=deviceClearedProperty...")
                         except Exception as e:
@@ -1243,9 +1258,7 @@ class Device:
         # Step 2: Clear the main device $description (this removes all nodes from schema)
         description_topic = f"{base_topic}/$description"
         try:
-            self.mqttc.publish(
-                description_topic, "", retain=True, qos=EBUS_HOMIE_MQTT_QOS
-            )
+            self.mqttc.publish(description_topic, "", retain=True, qos=self._qos)
             logger.info(
                 f"reason=deviceClearedDescription,deviceId={self._id},topic={description_topic}"
             )
@@ -1268,7 +1281,7 @@ class Device:
             logger.warning(f"reason=deviceClearTopicNoMqttClient,topic={topic_path}")
             return False
         try:
-            self.mqttc.publish(topic_path, "", retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+            self.mqttc.publish(topic_path, "", retain=True, qos=self._qos)
             logger.info(f"reason=deviceClearedTopic,topic={topic_path}")
             return True
         except Exception as e:
@@ -1344,7 +1357,7 @@ class Device:
                     logger.info(f"reason=devicePublishAlertNoValue,id={self._id}")
                     return
             if payload:
-                self.mqttc.publish(topic, payload, retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+                self.mqttc.publish(topic, payload, retain=True, qos=self._qos)
         except Exception as e:
             logger.exception(
                 f"reason=devicePublishException,id={self._id},attribute={attribute},value={value},e={e}"
@@ -1541,6 +1554,7 @@ class Controller:
         homie_domain: str = EBUS_HOMIE_DOMAIN,
         auto_start: bool = False,
         device_id: Optional[str] = None,
+        qos: int = EBUS_HOMIE_MQTT_QOS,
     ):
         """
         Initialize a Homie Controller
@@ -1550,9 +1564,11 @@ class Controller:
             homie_domain: Homie domain to monitor (default: 'ebus')
             auto_start: If True, automatically start discovery on init
             device_id: If set, subscribe only to this specific device (no wildcards)
+            qos: MQTT QoS level for all subscribe/publish operations (default: EBUS_HOMIE_MQTT_QOS)
         """
         self.homie_domain = homie_domain
         self.device_id = device_id
+        self._qos = qos
         self._mqtt_cfg = mqtt_cfg
         self.mqttc = None
         self.devices = {}  # {device_id: DiscoveredDevice}
@@ -1586,6 +1602,11 @@ class Controller:
             logger.info(f"reason=controllerConnected,clientID={client_id}")
         except Exception as e:
             logger.exception(f"reason=controllerConnectException,error={e}")
+
+    @property
+    def qos(self) -> int:
+        """Returns the MQTT QoS level for this controller"""
+        return self._qos
 
     def _on_connect(self) -> None:
         """Called when controller connects to MQTT broker"""
@@ -1626,32 +1647,32 @@ class Controller:
             self.mqttc.subscribe(
                 f"{base}/$state",
                 param=self._on_state_message,
-                qos=EBUS_HOMIE_MQTT_QOS,
+                qos=self._qos,
             )
             # Subscribe to $description
             self.mqttc.subscribe(
                 f"{base}/$description",
                 param=partial(self._on_description_message, self.device_id),
-                qos=EBUS_HOMIE_MQTT_QOS,
+                qos=self._qos,
             )
             # Subscribe to all properties: {base}/{node_id}/{property_id}
             self.mqttc.subscribe(
                 f"{base}/+/+",
                 param=partial(self._on_property_message, self.device_id),
-                qos=EBUS_HOMIE_MQTT_QOS,
+                qos=self._qos,
             )
             # Subscribe to all property targets
             self.mqttc.subscribe(
                 f"{base}/+/+/$target",
                 param=partial(self._on_target_message, self.device_id),
-                qos=EBUS_HOMIE_MQTT_QOS,
+                qos=self._qos,
             )
         else:
             # Wildcard discovery mode (original behavior)
             discovery_topic = f"{domain}/{EBUS_HOMIE_VERSION_MAJOR}/+/$state"
             logger.info(f"reason=startDiscovery,topic={discovery_topic}")
             self.mqttc.subscribe(
-                discovery_topic, param=self._on_state_message, qos=EBUS_HOMIE_MQTT_QOS
+                discovery_topic, param=self._on_state_message, qos=self._qos
             )
 
     def _on_state_message(self, topic: str, payload: bytes) -> None:
@@ -1739,7 +1760,7 @@ class Controller:
         self.mqttc.subscribe(
             description_topic,
             param=partial(self._on_description_message, device_id),
-            qos=EBUS_HOMIE_MQTT_QOS,
+            qos=self._qos,
         )
 
         # Subscribe to all properties and targets
@@ -1747,7 +1768,7 @@ class Controller:
         self.mqttc.subscribe(
             property_topic,
             param=partial(self._on_property_message, device_id),
-            qos=EBUS_HOMIE_MQTT_QOS,
+            qos=self._qos,
         )
 
         # Subscribe to all property targets
@@ -1755,7 +1776,7 @@ class Controller:
         self.mqttc.subscribe(
             target_topic,
             param=partial(self._on_target_message, device_id),
-            qos=EBUS_HOMIE_MQTT_QOS,
+            qos=self._qos,
         )
 
     def _on_description_message(
@@ -1841,7 +1862,7 @@ class Controller:
         node_id: str,
         property_id: str,
         value: str,
-        qos: int = EBUS_HOMIE_MQTT_QOS,
+        qos: Optional[int] = None,
     ) -> bool:
         """
         Send a command to set a device property
@@ -1854,7 +1875,7 @@ class Controller:
             node_id: Target node ID
             property_id: Target property ID
             value: Value to set (as string)
-            qos: MQTT QoS level (default: 2)
+            qos: MQTT QoS level (default: controller's QoS)
 
         Returns:
             True if message was sent successfully, False otherwise
@@ -1863,20 +1884,19 @@ class Controller:
             logger.error("reason=setPropertyFailedNoConnection")
             return False
 
+        effective_qos = qos if qos is not None else self._qos
         set_topic = f"{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{property_id}/set"
 
         logger.info(f"reason=settingProperty,topic={set_topic},value={value}")
         try:
             # Non-retained message as per convention
-            self.mqttc.publish(set_topic, value, qos=qos, retain=False)
+            self.mqttc.publish(set_topic, value, qos=effective_qos, retain=False)
             return True
         except Exception as e:
             logger.error(f"reason=setPropertyException,error={e}")
             return False
 
-    def broadcast(
-        self, subtopic: str, message: str, qos: int = EBUS_HOMIE_MQTT_QOS
-    ) -> bool:
+    def broadcast(self, subtopic: str, message: str, qos: Optional[int] = None) -> bool:
         """
         Broadcast a message to all Homie devices
 
@@ -1885,7 +1905,7 @@ class Controller:
         Args:
             subtopic: Broadcast subtopic (can be multi-level)
             message: Message payload
-            qos: MQTT QoS level
+            qos: MQTT QoS level (default: controller's QoS)
 
         Returns:
             True if message was sent successfully, False otherwise
@@ -1894,13 +1914,16 @@ class Controller:
             logger.error("reason=broadcastFailedNoConnection")
             return False
 
+        effective_qos = qos if qos is not None else self._qos
         broadcast_topic = (
             f"{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/$broadcast/{subtopic}"
         )
 
         logger.info(f"reason=broadcasting,topic={broadcast_topic}")
         try:
-            self.mqttc.publish(broadcast_topic, message, qos=qos, retain=False)
+            self.mqttc.publish(
+                broadcast_topic, message, qos=effective_qos, retain=False
+            )
             return True
         except Exception as e:
             logger.error(f"reason=broadcastException,error={e}")
