@@ -39,7 +39,7 @@ from .property import (
 # MQTT client
 from .mqtt import MqttClient
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     # Homie classes
