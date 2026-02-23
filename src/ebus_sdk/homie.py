@@ -42,73 +42,83 @@ import os
 import time
 import uuid
 from enum import Enum
+
 try:
     from enum import StrEnum
 except ImportError:
     # Python < 3.11 compatibility
     class StrEnum(str, Enum):
         pass
+
+
 from functools import partial
+
 # from deprecated import deprecated
 from typing import Any, Callable, List, Optional, Union
 from .mqtt import MqttClient
 
 # FIXME debug only?
 from pprint import pp, pformat
-logger = logging.getLogger('homie')
+
+logger = logging.getLogger("homie")
 logger.setLevel(logging.INFO)
 
 # eBus MQTT topic constants
-EBUS_HOMIE_DOMAIN = 'ebus'
+EBUS_HOMIE_DOMAIN = "ebus"
 EBUS_HOMIE_VERSION_MAJOR = 5
 EBUS_HOMIE_VERSION_MINOR = 0
 EBUS_HOMIE_VERSION_PATCH = 0
 EBUS_HOMIE_MQTT_QOS_DEFAULT = "2"
 
-EBUS_HOMIE_MQTT_QOS = int(os.environ.get('EBUS_HOMIE_MQTT_QOS_SITE', EBUS_HOMIE_MQTT_QOS_DEFAULT))
+EBUS_HOMIE_MQTT_QOS = int(
+    os.environ.get("EBUS_HOMIE_MQTT_QOS_SITE", EBUS_HOMIE_MQTT_QOS_DEFAULT)
+)
 
 if EBUS_HOMIE_MQTT_QOS < 1:
-    logger.warning(f'reason=homieQosLessThanOne,specifiedQos={EBUS_HOMIE_MQTT_QOS},defaultQos={EBUS_HOMIE_MQTT_QOS_DEFAULT}')
+    logger.warning(
+        f"reason=homieQosLessThanOne,specifiedQos={EBUS_HOMIE_MQTT_QOS},defaultQos={EBUS_HOMIE_MQTT_QOS_DEFAULT}"
+    )
 
 # Helper character constants for units
-UNICODE_DEGREE         = '\u00b0'
-UNICODE_EXPONENT_3     = '\u00b3'
-UNICODE_EXPONENT_MINUS = '\u207b'
-UNICODE_EXPONENT_1     = '\u00b9'
+UNICODE_DEGREE = "\u00b0"
+UNICODE_EXPONENT_3 = "\u00b3"
+UNICODE_EXPONENT_MINUS = "\u207b"
+UNICODE_EXPONENT_1 = "\u00b9"
+
 
 class Unit(StrEnum):
-    DEGREE_CELSIUS = UNICODE_DEGREE + 'C'
-    DEGREE_FAHRENHEIT = UNICODE_DEGREE + 'F'
+    DEGREE_CELSIUS = UNICODE_DEGREE + "C"
+    DEGREE_FAHRENHEIT = UNICODE_DEGREE + "F"
     DEGREE = UNICODE_DEGREE
-    LITER = 'L'
-    GALLON = 'gal'
-    VOLTS = 'V'
-    WATT = 'W'
-    KILOWATT = 'kW'
-    KILOWATT_HOUR = 'kWh'
-    AMPERE = 'A'
-    HERTZ = 'Hz'
-    REVOLUTIONS_PER_MINUTE = 'rpm'
-    PERCENT = '%'
-    METER = 'm'
-    CUBIC_METER = 'm' + UNICODE_EXPONENT_3
-    FEET = 'ft'
-    METERS_PER_SECOND = 'm/s'
-    KNOTS = 'kn'
-    PASCAL = 'Pa'
-    POUNDS_PER_SQUARE_INCH = 'psi'
-    PARTS_PER_MILLION = 'ppm'
-    SECONDS = 's'
-    MINUTES = 'min'
-    HOURS = 'h'
-    LUX = 'lx'
-    KELVIN = 'K'
-    MIRED = 'MK' + UNICODE_EXPONENT_MINUS + UNICODE_EXPONENT_1
-    COUNT_OR_AMOUNT = '#'
+    LITER = "L"
+    GALLON = "gal"
+    VOLTS = "V"
+    WATT = "W"
+    KILOWATT = "kW"
+    KILOWATT_HOUR = "kWh"
+    AMPERE = "A"
+    HERTZ = "Hz"
+    REVOLUTIONS_PER_MINUTE = "rpm"
+    PERCENT = "%"
+    METER = "m"
+    CUBIC_METER = "m" + UNICODE_EXPONENT_3
+    FEET = "ft"
+    METERS_PER_SECOND = "m/s"
+    KNOTS = "kn"
+    PASCAL = "Pa"
+    POUNDS_PER_SQUARE_INCH = "psi"
+    PARTS_PER_MILLION = "ppm"
+    SECONDS = "s"
+    MINUTES = "min"
+    HOURS = "h"
+    LUX = "lx"
+    KELVIN = "K"
+    MIRED = "MK" + UNICODE_EXPONENT_MINUS + UNICODE_EXPONENT_1
+    COUNT_OR_AMOUNT = "#"
     # VOLT_AMPERE_REACTIVE not in Homie specification, but we need it
     # https://github.com/homieiot/convention/issues/318
-    VOLT_AMPERE_REACTIVE = 'var'
-    WATT_HOUR = 'Wh'
+    VOLT_AMPERE_REACTIVE = "var"
+    WATT_HOUR = "Wh"
 
 
 class PropertyDatatype(StrEnum):
@@ -118,15 +128,16 @@ class PropertyDatatype(StrEnum):
     PropertyDatatype[foo].value -> 'string' for foo == 'STRING'
     PropertyDatatype('string').name -> 'STRING'
     """
-    INTEGER = 'integer'
-    FLOAT = 'float'
-    BOOLEAN = 'boolean'
-    STRING = 'string'
-    ENUM = 'enum'
-    COLOR = 'color'
-    DATETIME = 'datetime'
-    DURATION = 'duration'
-    JSON = 'json'
+
+    INTEGER = "integer"
+    FLOAT = "float"
+    BOOLEAN = "boolean"
+    STRING = "string"
+    ENUM = "enum"
+    COLOR = "color"
+    DATETIME = "datetime"
+    DURATION = "duration"
+    JSON = "json"
 
 
 def datatype_from_type(type: Type) -> Optional[PropertyDatatype]:
@@ -144,16 +155,16 @@ def datatype_from_type(type: Type) -> Optional[PropertyDatatype]:
         return PropertyDatatype.STRING
     elif type == StrEnum:
         return PropertyDatatype.ENUM
-    elif type == 'color':
+    elif type == "color":
         return PropertyDatatype.COLOR
-    elif type == 'datetime':
+    elif type == "datetime":
         return PropertyDatatype.DATETIME
-    elif type == 'duration':
+    elif type == "duration":
         return PropertyDatatype.DURATION
-    elif type == 'json':
+    elif type == "json":
         return PropertyDatatype.JSON
     else:
-        logger.warning(f'reason=datatypeFromTypeUnknownType,type={type}')
+        logger.warning(f"reason=datatypeFromTypeUnknownType,type={type}")
         return None
 
 
@@ -164,11 +175,12 @@ class DeviceState(StrEnum):
     DeviceState[foo].value -> 'ready' for foo == 'READY'
     DeviceState('ready').name -> 'READY'
     """
-    INIT = 'init'
-    READY = 'ready'
-    DISCONNECTED = 'disconnected'
-    SLEEPING = 'sleeping'
-    LOST = 'lost'
+
+    INIT = "init"
+    READY = "ready"
+    DISCONNECTED = "disconnected"
+    SLEEPING = "sleeping"
+    LOST = "lost"
 
 
 class Property:
@@ -180,39 +192,41 @@ class Property:
     TODO: Should device_id come from Node -> Device -> id?
     TODO: Fail loudly if "id" not provided
     """
-    def __init__(self,
-                 id: Optional[str] = None,
-                 value: Optional[Any] = None,
-                 name: Optional[str] = None,
-                 datatype: PropertyDatatype = None,
-                 format: Optional[str] = None,
-                 settable: Optional[bool] = False,
-                 set_callback: Optional[Callable] = None,
-                 retained: Optional[bool] = True,
-                 unit: Optional[str] = None,
-                 round_to: Optional[int] = None,
-                 supports_target: Optional[bool] = False,
-                 node: Optional[Node] = None,
-                 device: Optional[Device] = None,
-                 async_loop: Optional[asyncio.SelectorEventLoop] = False,
-                 from_dict: Optional[dict] = None
-                 ):
+
+    def __init__(
+        self,
+        id: Optional[str] = None,
+        value: Optional[Any] = None,
+        name: Optional[str] = None,
+        datatype: PropertyDatatype = None,
+        format: Optional[str] = None,
+        settable: Optional[bool] = False,
+        set_callback: Optional[Callable] = None,
+        retained: Optional[bool] = True,
+        unit: Optional[str] = None,
+        round_to: Optional[int] = None,
+        supports_target: Optional[bool] = False,
+        node: Optional[Node] = None,
+        device: Optional[Device] = None,
+        async_loop: Optional[asyncio.SelectorEventLoop] = False,
+        from_dict: Optional[dict] = None,
+    ):
         if from_dict:
             # from_dict not tiven
-            id = from_dict.get('id', None)
-            value = from_dict.get('value', None)
-            name = from_dict.get('name', None)
-            datatype = from_dict.get('datatype', None)
-            format = from_dict.get('format', None)
-            settable = from_dict.get('settable', False)
-            retained = from_dict.get('retained', True)
-            unit = from_dict.get('unit', None)
-            round_to = from_dict.get('round_to', None)
-            supports_target = from_dict.get('supports_target', False)
-            node = from_dict.get('node', None)
-            device = from_dict.get('device', None)
-            set_callback = from_dict.get('set_callback', None)
-            async_loop = from_dict.get('async_loop', None)
+            id = from_dict.get("id", None)
+            value = from_dict.get("value", None)
+            name = from_dict.get("name", None)
+            datatype = from_dict.get("datatype", None)
+            format = from_dict.get("format", None)
+            settable = from_dict.get("settable", False)
+            retained = from_dict.get("retained", True)
+            unit = from_dict.get("unit", None)
+            round_to = from_dict.get("round_to", None)
+            supports_target = from_dict.get("supports_target", False)
+            node = from_dict.get("node", None)
+            device = from_dict.get("device", None)
+            set_callback = from_dict.get("set_callback", None)
+            async_loop = from_dict.get("async_loop", None)
         # Regardless of how we got this info, construct it
         # AKA, the "business logic" of the constructor
         self._id = id
@@ -238,17 +252,21 @@ class Property:
         self.async_loop = async_loop
         # Track whether this property has ever been published (FIX for MQTT topic persistence)
         self._ever_published = False
-        self._initial_value_was_none = (value is None)
+        self._initial_value_was_none = value is None
         # Check for skip_initial_publish flag from dict
-        self._skip_initial_publish = from_dict.get('skip_initial_publish', False) if from_dict else False
+        self._skip_initial_publish = (
+            from_dict.get("skip_initial_publish", False) if from_dict else False
+        )
 
     def as_dict(self) -> dict:
-        return {'id': self.id(),
-                'name': self.name(),
-                'value': self.value(),
-                'datatype': self.datatype(),
-                'format': self.format(),
-                'settable': self.settable()}
+        return {
+            "id": self.id(),
+            "name": self.name(),
+            "value": self.value(),
+            "datatype": self.datatype(),
+            "format": self.format(),
+            "settable": self.settable(),
+        }
 
     def set_node(self, node: Node) -> None:
         self._node = node
@@ -267,7 +285,7 @@ class Property:
         """
         node = self.node()
         if not node:
-            logger.warning(f'reason=propertyGetNodeNoNode,propertyID={self._id}')
+            logger.warning(f"reason=propertyGetNodeNoNode,propertyID={self._id}")
             return None
         return self.node().id()
 
@@ -279,7 +297,7 @@ class Property:
         """
         node = self.node()
         if not node:
-            logger.warning(f'reason=propertyGetDeviceIdNoNode,propertyID={self._id}')
+            logger.warning(f"reason=propertyGetDeviceIdNoNode,propertyID={self._id}")
             return None
         # return node.get_device_id() # TODO how about node.device().id()
         return node.device().id()
@@ -310,7 +328,9 @@ class Property:
         round_to = self.round()
         if round_to:
             rounded_value = round(self._value, round_to)
-            logger.debug(f'reason=propertyGetRounding,id={self._id},rounded={rounded_value},value={self._value}')
+            logger.debug(
+                f"reason=propertyGetRounding,id={self._id},rounded={rounded_value},value={self._value}"
+            )
             return rounded_value
         else:
             return self._value
@@ -333,7 +353,9 @@ class Property:
         property_type = self.datatype()
         if property_type == PropertyDatatype.BOOLEAN:
             if not isinstance(property_value, bool):
-                logger.warning(f'reason=coercedValueInvalidBoolean,propertyId={self._id},value={property_value}')
+                logger.warning(
+                    f"reason=coercedValueInvalidBoolean,propertyId={self._id},value={property_value}"
+                )
                 return None
             return str(property_value).lower()
 
@@ -360,7 +382,7 @@ class Property:
         Returns the property's datatype.value
         """
         datatype = self._datatype
-        logger.debug(f'reason=getDatatype,datatype={datatype}')
+        logger.debug(f"reason=getDatatype,datatype={datatype}")
         return datatype
 
     def get_mqtt_client(self) -> MqttClient:
@@ -369,11 +391,13 @@ class Property:
         """
         node = self.node()
         if not node:
-            logger.warning(f'reason=propertyGetMqttClientNoNode,propertyID={self._id}')
+            logger.warning(f"reason=propertyGetMqttClientNoNode,propertyID={self._id}")
             return None
         mqttc = node.get_mqtt_client()
         if not mqttc:
-            logger.warning(f'reason=propertyGetMqttClientNoMqttClient,propertyID={self._id}')
+            logger.warning(
+                f"reason=propertyGetMqttClientNoMqttClient,propertyID={self._id}"
+            )
         return mqttc
 
     def start_mqtt_client(self) -> None:
@@ -382,13 +406,15 @@ class Property:
         """
         mqttc = self.get_mqtt_client()
         if not mqttc:
-            logger.warning(f'reason=propertyStartMqttClientNoMqttClient,propertyID={self._id}')
+            logger.warning(
+                f"reason=propertyStartMqttClientNoMqttClient,propertyID={self._id}"
+            )
             return
         try:
             if not mqttc.is_running:
                 mqttc.start()
         except Exception as e:
-            logger.warning(f'reason=propertyStartMqttClientException,e={e}')
+            logger.warning(f"reason=propertyStartMqttClientException,e={e}")
 
     def settable(self) -> bool:
         return self._settable
@@ -405,7 +431,9 @@ class Property:
         if value:
             # Subscribe to the /set topic now that the property is settable
             self.set_subscribe()
-        logger.info(f'reason=propertySetSettable,id={self._id},settable={self._settable}')
+        logger.info(
+            f"reason=propertySetSettable,id={self._id},settable={self._settable}"
+        )
 
     def retained(self) -> bool:
         return self._retained
@@ -431,8 +459,12 @@ class Property:
         The $target attribute must either be used for every value update (including the initial one), or it must never be used.
         TODO: Currently unimplemented, TBD how $target gets set on initial property value set...
         """
-        logger.info(f'reason=propertyPublishTargetValue,propertyID={self._id},value={payload}')
-        logger.warning(f'reason=propertyPublishTargetValueNotImplemented,propertyID={self._id},value={payload}')
+        logger.info(
+            f"reason=propertyPublishTargetValue,propertyID={self._id},value={payload}"
+        )
+        logger.warning(
+            f"reason=propertyPublishTargetValueNotImplemented,propertyID={self._id},value={payload}"
+        )
 
     def publish_value(self) -> bool:
         """
@@ -440,33 +472,45 @@ class Property:
         """
         mqttc = self.get_mqtt_client()
         if not mqttc or not mqttc.is_running:
-            logger.warning(f'reason=propertyPublishValueNoMqttClient,id={self._id}')
+            logger.warning(f"reason=propertyPublishValueNoMqttClient,id={self._id}")
             return False
         node_id = self.get_node_id()
         device_id = self.get_device_id()
         if not (device_id and node_id):
-            logger.warning(f'propertyPublishValueInsufficientIDs,deviceID={device_id},nodeID={node_id},propertyID={self._id}')
+            logger.warning(
+                f"propertyPublishValueInsufficientIDs,deviceID={device_id},nodeID={node_id},propertyID={self._id}"
+            )
             return False
         # FIX: Don't publish if value is None and we've never published before or skip flag is set
-        if self._value is None and (not self._ever_published or self._skip_initial_publish):
-            logger.debug(f'reason=propertySkipPublishNoneValue,propertyID={self._id}')
+        if self._value is None and (
+            not self._ever_published or self._skip_initial_publish
+        ):
+            logger.debug(f"reason=propertySkipPublishNoneValue,propertyID={self._id}")
             return True
-        topic = f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}'
+        topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}"
         if self._value is None:
-            logger.debug(f'reason=propertyPublishValueIsNone,deviceID={device_id},nodeID={node_id},propertyID={self._id}')
+            logger.debug(
+                f"reason=propertyPublishValueIsNone,deviceID={device_id},nodeID={node_id},propertyID={self._id}"
+            )
             return False
         try:
             value = self.coerced_value()
             if value is None:
-                logger.warning(f'reason=propertyPublishValueCoercionFailed,propertyID={self._id},rawValue={self._value}')
+                logger.warning(
+                    f"reason=propertyPublishValueCoercionFailed,propertyID={self._id},rawValue={self._value}"
+                )
                 return False
-            logger.debug(f'reason=propertyPublishValue,value={value},topic={topic},retained={self.retained()}')
+            logger.debug(
+                f"reason=propertyPublishValue,value={value},topic={topic},retained={self.retained()}"
+            )
             mqttc.publish(topic, value, retain=self.retained(), qos=EBUS_HOMIE_MQTT_QOS)
             self._ever_published = True  # FIX: Mark as published
-            self._skip_initial_publish = False  # FIX: Clear skip flag after first publish
+            self._skip_initial_publish = (
+                False  # FIX: Clear skip flag after first publish
+            )
             return True
         except Exception as e:
-            logger.warning(f'reason=propertyPublishValuePublishException,e={e}')
+            logger.warning(f"reason=propertyPublishValuePublishException,e={e}")
             return False
 
     def clear_value(self) -> bool:
@@ -477,27 +521,35 @@ class Property:
         # FIX: Don't clear if we never published a value
         # This prevents creating phantom topics during cleanup
         if not self._ever_published:
-            logger.info(f'reason=propertySkipClearNeverPublished,propertyID={self._id}')
+            logger.info(f"reason=propertySkipClearNeverPublished,propertyID={self._id}")
             return True
 
         mqttc = self.get_mqtt_client()
         if not mqttc or not mqttc.is_running:
-            logger.warning(f'reason=propertyClearValueNoMqttClient,propertyID={self._id}')
+            logger.warning(
+                f"reason=propertyClearValueNoMqttClient,propertyID={self._id}"
+            )
             return False
         node_id = self.get_node_id()
         device_id = self.get_device_id()
         if not (device_id and node_id):
-            logger.warning(f'reason=propertyClearValueInsufficientIDs,deviceID={device_id},nodeID={node_id},propertyID={self._id}')
+            logger.warning(
+                f"reason=propertyClearValueInsufficientIDs,deviceID={device_id},nodeID={node_id},propertyID={self._id}"
+            )
             return False
-        topic = f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}'
+        topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}"
         try:
             # Publishing empty string clears retained message
-            mqttc.publish(topic, '', retain=True, qos=EBUS_HOMIE_MQTT_QOS)
-            logger.info(f'reason=propertyClearedValue,propertyID={self._id},topic={topic}')
+            mqttc.publish(topic, "", retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+            logger.info(
+                f"reason=propertyClearedValue,propertyID={self._id},topic={topic}"
+            )
             self._ever_published = False  # FIX: Reset the flag
             return True
         except Exception as e:
-            logger.warning(f'reason=propertyClearValueException,propertyID={self._id},topic={topic},exception={e}')
+            logger.warning(
+                f"reason=propertyClearValueException,propertyID={self._id},topic={topic},exception={e}"
+            )
             return False
 
     def was_ever_published(self) -> bool:
@@ -512,21 +564,21 @@ class Property:
         """
         Returns a dict containing the Homie 5 $description of the Property
         """
-        logger.info(f'reason=propertyDescriptionEntered,id={self._id}')
+        logger.info(f"reason=propertyDescriptionEntered,id={self._id}")
         property = dict()
-        property['name'] = self._name
-        property['datatype'] = self.datatype()
+        property["name"] = self._name
+        property["datatype"] = self.datatype()
         if self._format:
-            property['format'] = self.format()
+            property["format"] = self.format()
         if self._settable:
-            property['settable'] = self._settable
+            property["settable"] = self._settable
         if not self._retained:
-            property['retained'] = self._retained
+            property["retained"] = self._retained
         if self._unit:
-            property['unit'] = self._unit
+            property["unit"] = self._unit
         return property
 
-    def _settable_callback(self, topic: str, payload: Union[bytes,bytearray]) -> None:
+    def _settable_callback(self, topic: str, payload: Union[bytes, bytearray]) -> None:
         """
         For each settable property, there is a property/set topic that can be published to
         This is the callback for the subscription to each such property/set topic
@@ -534,39 +586,47 @@ class Property:
         [homieDomain]/[homieVerson]/[deviceID]/[nodeID]/mode/set
         [homieDomain]/[homieVerion]/[deviceID]/[nodeID]/setpoint/set
         """
-        logger.debug(f'reason=propertySetCallback,topic={topic}')
+        logger.debug(f"reason=propertySetCallback,topic={topic}")
         try:
-            topic_segments  = topic.split('/')
-            homie_domain    = topic_segments[0]
-            homie_version   = topic_segments[1]
-            device_id       = topic_segments[2]
-            node_id         = topic_segments[3]
-            property_id     = topic_segments[4]
+            topic_segments = topic.split("/")
+            homie_domain = topic_segments[0]
+            homie_version = topic_segments[1]
+            device_id = topic_segments[2]
+            node_id = topic_segments[3]
+            property_id = topic_segments[4]
             property_id_set = topic_segments[5]
         except:
-            logger.warning(f'reason=nodeSetCallbackTopicParseException,e={e}')
+            logger.warning(f"reason=nodeSetCallbackTopicParseException,e={e}")
             return
-        if not ((homie_domain == EBUS_HOMIE_DOMAIN) and
-                (homie_version == str(EBUS_HOMIE_VERSION_MAJOR)) and
-                (property_id_set == 'set')):
-            logger.debug(f'reason=nodeSetCallbackInvalidTopic,topic={topic}')
+        if not (
+            (homie_domain == EBUS_HOMIE_DOMAIN)
+            and (homie_version == str(EBUS_HOMIE_VERSION_MAJOR))
+            and (property_id_set == "set")
+        ):
+            logger.debug(f"reason=nodeSetCallbackInvalidTopic,topic={topic}")
             return
         # It is possible that we have a valid property/set
         set_callback = self.get_set_callback()
         if not self.settable():
-            logger.info(f'reason=propertySetCallbackPropertyNotSettable,propertyID={property_id}')
+            logger.info(
+                f"reason=propertySetCallbackPropertyNotSettable,propertyID={property_id}"
+            )
             return
         if not set_callback:
-            logger.info(f'reason=propertySetCallbackPropertyNoSetCallback,propertyID={property_id}')
+            logger.info(
+                f"reason=propertySetCallbackPropertyNoSetCallback,propertyID={property_id}"
+            )
             return
         try:
-            decoded_payload = payload.decode('utf-8') # do we need to str() this?
+            decoded_payload = payload.decode("utf-8")  # do we need to str() this?
             if self.is_json_datatype():
                 payload = json.loads(decoded_payload)
             else:
                 payload = decoded_payload
             # We have the payload
-            logger.debug(f'reason=propertySetCallbackValue,propertyID={property_id},payload={payload},callback={set_callback}')
+            logger.debug(
+                f"reason=propertySetCallbackValue,propertyID={property_id},payload={payload},callback={set_callback}"
+            )
             if self.supports_target():
                 # Property supports_target, publish that!
                 self.publish_target_value(payload)
@@ -576,32 +636,38 @@ class Property:
             else:
                 set_callback(payload)
         except Exception as e:
-            logger.exception(f'reason=propertySetCallbackException,e={e}')
+            logger.exception(f"reason=propertySetCallbackException,e={e}")
 
     def set_subscribe(self) -> None:
         """
         Subscribe to property/set topic on Homie broker
         TODO: Not sure why this is a public method...
         """
-        logger.debug(f'reason=propertySetSubscribe,id={self._id}')
+        logger.debug(f"reason=propertySetSubscribe,id={self._id}")
         mqttc = self.get_mqtt_client()
         if not mqttc:
-            logger.warning(f'reason=propertySetSubscribeNoMqttClient')
+            logger.warning(f"reason=propertySetSubscribeNoMqttClient")
             return
         if not self.settable():
-            logger.debug(f'reason=propertySetSubscribePropertyNotSettable,id={self._id}')
+            logger.debug(
+                f"reason=propertySetSubscribePropertyNotSettable,id={self._id}"
+            )
             return
         # Property is settable
         node_id = self.get_node_id()
         device_id = self.get_device_id()
         if not (device_id and node_id):
-            logger.warning(f'propertySetSubscribeInsufficientIDs,deviceID={device_id},nodeID={node_id},propertyID={self._id}')
+            logger.warning(
+                f"propertySetSubscribeInsufficientIDs,deviceID={device_id},nodeID={node_id},propertyID={self._id}"
+            )
             return
-        topic = f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}/set'
+        topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}/set"
         try:
-            mqttc.subscribe(topic, param=partial(self._settable_callback), qos=EBUS_HOMIE_MQTT_QOS)
+            mqttc.subscribe(
+                topic, param=partial(self._settable_callback), qos=EBUS_HOMIE_MQTT_QOS
+            )
         except Exception as e:
-            logger.warning(f'reason=propertySetSubscribeSubscribeException,e={e}')
+            logger.warning(f"reason=propertySetSubscribeSubscribeException,e={e}")
         # Start the MQTT client loop() thread
         # TODO: Is this the best, or even a good, place to do this???
         # self.start_mqtt_client()
@@ -612,14 +678,17 @@ class Node:
     Object representing a Homie MQTT Node
     https://homieiot.github.io/specification/
     """
-    def __init__(self,
-                 id: Optional[str] = None,
-                 name: Optional[str] = None,
-                 type: Optional[str] = None,
-                 properties: dict = {},
-                 device: Optional[Device] = None,
-                 # mqttc: Optiona[MqttClient] = None, # DCJ pretty sure we can remove this
-                 from_dict: Optional[dict] = None):
+
+    def __init__(
+        self,
+        id: Optional[str] = None,
+        name: Optional[str] = None,
+        type: Optional[str] = None,
+        properties: dict = {},
+        device: Optional[Device] = None,
+        # mqttc: Optiona[MqttClient] = None, # DCJ pretty sure we can remove this
+        from_dict: Optional[dict] = None,
+    ):
         """
         There are two ways to specify the arguments of a new Node:
           1. Explict named parameters
@@ -628,11 +697,11 @@ class Node:
         """
         if from_dict:
             # Instantiating Node from dict
-            self._id = from_dict.get('id', None)
-            self._name = from_dict.get('name', self._id)
-            self._type = from_dict.get('type', None)
-            self._properties = from_dict.get('properties', {})
-            self._device = from_dict.get('device', None)
+            self._id = from_dict.get("id", None)
+            self._name = from_dict.get("name", self._id)
+            self._type = from_dict.get("type", None)
+            self._properties = from_dict.get("properties", {})
+            self._device = from_dict.get("device", None)
         else:
             self._id = id
             if name:
@@ -644,13 +713,11 @@ class Node:
             self._device = device
 
     def as_dict(self) -> dict:
-        returned_dict = {'id': self.id(),
-                         'name': self.name(),
-                         'type': self.type()}
+        returned_dict = {"id": self.id(), "name": self.name(), "type": self.type()}
         properties_dict = {}
         for id, property in self.properties().items():
             properties_dict.update({id: property.as_dict()})
-        returned_dict.update({'properties': properties_dict})
+        returned_dict.update({"properties": properties_dict})
         return returned_dict
 
     def id(self) -> str:
@@ -686,11 +753,11 @@ class Node:
     def get_mqtt_client(self) -> MqttClient:
         device = self.device()
         if not device:
-            logger.warning(f'reason=nodeGetMqttClientNoDevice,nodeID={self._id}')
+            logger.warning(f"reason=nodeGetMqttClientNoDevice,nodeID={self._id}")
             return None
         mqttc = device.get_mqtt_client()
         if not mqttc:
-            logger.warning(f'reason=nodeGetMqttClientNoMqttClient,nodeID={self._id}')
+            logger.warning(f"reason=nodeGetMqttClientNoMqttClient,nodeID={self._id}")
         return mqttc
 
     def add_property(self, property: Property) -> Property:
@@ -736,12 +803,16 @@ class Node:
         Returns True if removed, False if not found
         """
         if property_id not in self._properties:
-            logger.warning(f'reason=nodeDeletePropertyNotFound,nodeId={self._id},propertyId={property_id}')
+            logger.warning(
+                f"reason=nodeDeletePropertyNotFound,nodeId={self._id},propertyId={property_id}"
+            )
             return False
         property = self._properties[property_id]
         property.clear_value()
         del self._properties[property_id]
-        logger.info(f'reason=nodeDeletedProperty,nodeId={self._id},propertyId={property_id}')
+        logger.info(
+            f"reason=nodeDeletedProperty,nodeId={self._id},propertyId={property_id}"
+        )
         return True
 
     def clear_all_properties(self) -> None:
@@ -752,10 +823,13 @@ class Node:
 
         for property_id, property in list(self._properties.items()):
             # FIX: Only clear properties that were actually published
-            if hasattr(property, 'was_ever_published') and property.was_ever_published():
+            if (
+                hasattr(property, "was_ever_published")
+                and property.was_ever_published()
+            ):
                 property.clear_value()
                 cleared_count += 1
-            elif hasattr(property, '_ever_published') and property._ever_published:
+            elif hasattr(property, "_ever_published") and property._ever_published:
                 property.clear_value()
                 cleared_count += 1
             else:
@@ -763,22 +837,24 @@ class Node:
 
         self._properties.clear()
         # FIX: Enhanced logging with counts
-        logger.info(f'reason=nodeClearedAllProperties,nodeId={self._id},cleared={cleared_count},skipped={skipped_count}')
+        logger.info(
+            f"reason=nodeClearedAllProperties,nodeId={self._id},cleared={cleared_count},skipped={skipped_count}"
+        )
 
     def description(self) -> dict:
         """
         Returns dict representing the Node's $description attribute
         """
-        logger.info(f'reason=nodeDescriptionEntered,id={self._id}')
-        logger.info(f'reason=nodeDescriptionNode,node={pformat(self.as_dict())}')
+        logger.info(f"reason=nodeDescriptionEntered,id={self._id}")
+        logger.info(f"reason=nodeDescriptionNode,node={pformat(self.as_dict())}")
         description = dict()
-        description['name'] = self._name
-        description['type'] = self._type
+        description["name"] = self._name
+        description["type"] = self._type
         properties = dict()
         properties_snapshot = dict(self._properties)
         for property_id, attributes in properties_snapshot.items():
             properties[property_id] = attributes.description()
-        description['properties'] = properties
+        description["properties"] = properties
         return description
 
     def publish(self) -> None:
@@ -787,10 +863,14 @@ class Node:
         """
         node_id = self.id()
         property_count = len(self._properties)
-        logger.debug(f'reason=nodePublish,nodeId={node_id},propertyCount={property_count}')
+        logger.debug(
+            f"reason=nodePublish,nodeId={node_id},propertyCount={property_count}"
+        )
         # Use list() to create a shallow copy, preventing crash if dict changes during iteration
         for property_id, property in list(self._properties.items()):
-            logger.debug(f'reason=nodePublishProperty,nodeId={node_id},propertyId={property_id}')
+            logger.debug(
+                f"reason=nodePublishProperty,nodeId={node_id},propertyId={property_id}"
+            )
             property.publish_value()
 
 
@@ -808,7 +888,8 @@ class StateTransitionContext:
             device.delete_node(...)
         # State is automatically set to READY here
     """
-    def __init__(self, device: 'Device'):
+
+    def __init__(self, device: "Device"):
         self.device = device
 
     def __enter__(self):
@@ -820,7 +901,9 @@ class StateTransitionContext:
         try:
             self.device._end_state_transition()
         except Exception as e:
-            logger.warning(f'reason=stateTransitionContextExitException,deviceId={self.device._id},e={e}')
+            logger.warning(
+                f"reason=stateTransitionContextExitException,deviceId={self.device._id},e={e}"
+            )
         # Return False to let any exception from the with block propagate to the caller
         # (returning True would suppress it)
         return False
@@ -842,21 +925,24 @@ class Device:
          "port": 1883,
          "homie_domains": ["ebus"],
          "authentication": {"type": "USER_PASS",
-	                    "username": "MyUserName",
+                            "username": "MyUserName",
                             "password": "SECRET"}}
 
     homie_domains config for future use, not currently supported by this code
     """
-    def __init__(self,
-                 id: str,
-                 name: Optional[str] = None,
-                 type: Optional[str] = None,
-                 children_ids: Optional[List] = [],
-                 root_id: Optional[str] = None,
-                 parent_id: Optional[str] = None,
-                 nodes: Optional[List] = [],
-                 extensions: Optional[List] = [],
-                 mqtt_cfg: Optional[dict] = {}):
+
+    def __init__(
+        self,
+        id: str,
+        name: Optional[str] = None,
+        type: Optional[str] = None,
+        children_ids: Optional[List] = [],
+        root_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        nodes: Optional[List] = [],
+        extensions: Optional[List] = [],
+        mqtt_cfg: Optional[dict] = {},
+    ):
         # Basic initialization
         self.mqttc = None
         self._state = None
@@ -871,7 +957,9 @@ class Device:
         self._mqtt_cfg = mqtt_cfg
         # If the device is NOT the root device, both root_id and parent_id are required
         if (root_id and not parent_id) or (not root_id and parent_id):
-            logger.exception(f'reason=deviceInitRootParentException,id={id},rootID={root_id},parentID={parent_id}')
+            logger.exception(
+                f"reason=deviceInitRootParentException,id={id},rootID={root_id},parentID={parent_id}"
+            )
         self._root_id = root_id
         self._parent_id = parent_id
         # Initialize nodes here, but note that we'll add any provided nodes below
@@ -889,14 +977,16 @@ class Device:
         nodes = {}
         for node_id, node in self.nodes().items():
             nodes.update({node_id, node.as_dict()})
-        return {'id': self.id(),
-                'name': self.name(),
-                'type': self.type(),
-                'children_ids': self.children_ids(),
-                'parent_id': self.parent_id(),
-                'root_id': self.root_id(),
-                'extensions': self.extensions(),
-                'nodes': nodes}
+        return {
+            "id": self.id(),
+            "name": self.name(),
+            "type": self.type(),
+            "children_ids": self.children_ids(),
+            "parent_id": self.parent_id(),
+            "root_id": self.root_id(),
+            "extensions": self.extensions(),
+            "nodes": nodes,
+        }
 
     @staticmethod
     def now_ems() -> int:
@@ -962,7 +1052,7 @@ class Device:
     def get_mqtt_client(self) -> MqttClient:
         mqttc = self.mqttc
         if not mqttc:
-            logger.warning(f'reason=deviceGetMqttClientNoMqttClient,id={self._id}')
+            logger.warning(f"reason=deviceGetMqttClientNoMqttClient,id={self._id}")
         return mqttc
 
     def start_mqtt_client(self) -> None:
@@ -973,28 +1063,28 @@ class Device:
         """
         Returns a dict of the $description attribute of the Device
         """
-        logger.info(f'reason=deviceDescriptionEntered,id={self._id}')
+        logger.info(f"reason=deviceDescriptionEntered,id={self._id}")
         description = dict()
-        description['homie'] = f'{EBUS_HOMIE_VERSION_MAJOR}.{EBUS_HOMIE_VERSION_MINOR}'
+        description["homie"] = f"{EBUS_HOMIE_VERSION_MAJOR}.{EBUS_HOMIE_VERSION_MINOR}"
         # Version should be changed any time the description document is changed
-        description['version'] = Device.now_ems()
-        description['type'] = self._type
-        description['name'] = self._name
+        description["version"] = Device.now_ems()
+        description["type"] = self._type
+        description["name"] = self._name
         nodes_descriptions = dict()
         nodes_snapshot = dict(self._nodes)
         for node_id, node in nodes_snapshot.items():
             nodes_descriptions[node_id] = node.description()
-        description['nodes'] = nodes_descriptions
-        description['children'] = self._children_ids
+        description["nodes"] = nodes_descriptions
+        description["children"] = self._children_ids
         if self._root_id:
             # ID of the root parent device.
             # Required if the device is NOT the root device, MUST be omitted otherwise.
-            description['root'] = self._root_id
+            description["root"] = self._root_id
         if self._parent_id:
             # ID of the parent device.
             # Required if the parent is NOT the root device. Defaults to the value of the root property.
-            description['parent'] = self._parent_id
-        description['extensions'] = self._extensions
+            description["parent"] = self._parent_id
+        description["extensions"] = self._extensions
         return description
 
     def set_state(self, state: DeviceState) -> bool:
@@ -1095,7 +1185,9 @@ class Device:
         Returns True if removed, False if not found
         """
         if node_id not in self._nodes:
-            logger.warning(f'reason=deviceDeleteNodeNotFound,deviceId={self._id},nodeId={node_id}')
+            logger.warning(
+                f"reason=deviceDeleteNodeNotFound,deviceId={self._id},nodeId={node_id}"
+            )
             return False
         node = self._nodes[node_id]
         # Clear all property topics first
@@ -1106,7 +1198,7 @@ class Device:
         del self._nodes[node_id]
         # Update device description (which removes the node from the schema)
         self.publish_description()
-        logger.info(f'reason=deviceDeletedNode,deviceId={self._id},nodeId={node_id}')
+        logger.info(f"reason=deviceDeletedNode,deviceId={self._id},nodeId={node_id}")
         return True
 
     def delete_all_from_mqtt(self) -> None:
@@ -1114,45 +1206,58 @@ class Device:
         Delete entire device from MQTT broker: all nodes, properties, and description.
         Used for clean shutdown. Does NOT republish anything, does NOT publish node descriptions.
         """
-        logger.info(f'reason=deviceDeleteAllFromMqtt,deviceId={self._id}')
+        logger.info(f"reason=deviceDeleteAllFromMqtt,deviceId={self._id}")
 
         if not self.mqttc:
-            logger.warning(f'reason=deviceDeleteAllFromMqttNoMqttClient,deviceId={self._id}')
+            logger.warning(
+                f"reason=deviceDeleteAllFromMqttNoMqttClient,deviceId={self._id}"
+            )
             return
 
-        base_topic = f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}'
+        base_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}"
 
         # Step 1: Clear all property values that were actually published
         for node_id, node in list(self._nodes.items()):
-            if hasattr(node, '_properties'):
+            if hasattr(node, "_properties"):
                 for prop_id, prop in list(node._properties.items()):
                     # Only clear if property was ever published
                     was_published = False
-                    if hasattr(prop, 'was_ever_published') and prop.was_ever_published():
+                    if (
+                        hasattr(prop, "was_ever_published")
+                        and prop.was_ever_published()
+                    ):
                         was_published = True
-                    elif hasattr(prop, '_ever_published') and prop._ever_published:
+                    elif hasattr(prop, "_ever_published") and prop._ever_published:
                         was_published = True
 
                     if was_published:
-                        prop_topic = f'{base_topic}/{node_id}/{prop_id}'
+                        prop_topic = f"{base_topic}/{node_id}/{prop_id}"
                         try:
-                            self.mqttc.publish(prop_topic, '', retain=True, qos=EBUS_HOMIE_MQTT_QOS)
-                            logger.debug(f'reason=deviceClearedProperty...')
+                            self.mqttc.publish(
+                                prop_topic, "", retain=True, qos=EBUS_HOMIE_MQTT_QOS
+                            )
+                            logger.debug(f"reason=deviceClearedProperty...")
                         except Exception as e:
-                            logger.warning(f'reason=deviceClearPropertyFailed...')
+                            logger.warning(f"reason=deviceClearPropertyFailed...")
 
         # Step 2: Clear the main device $description (this removes all nodes from schema)
-        description_topic = f'{base_topic}/$description'
+        description_topic = f"{base_topic}/$description"
         try:
-            self.mqttc.publish(description_topic, '', retain=True, qos=EBUS_HOMIE_MQTT_QOS)
-            logger.info(f'reason=deviceClearedDescription,deviceId={self._id},topic={description_topic}')
+            self.mqttc.publish(
+                description_topic, "", retain=True, qos=EBUS_HOMIE_MQTT_QOS
+            )
+            logger.info(
+                f"reason=deviceClearedDescription,deviceId={self._id},topic={description_topic}"
+            )
         except Exception as e:
-            logger.warning(f'reason=deviceClearDescriptionFailed,deviceId={self._id},error={e}')
+            logger.warning(
+                f"reason=deviceClearDescriptionFailed,deviceId={self._id},error={e}"
+            )
 
         # Step 3: Clear internal tracking (no publishing happens here)
         self._nodes.clear()
 
-        logger.info(f'reason=deviceDeleteAllFromMqttComplete,deviceId={self._id}')
+        logger.info(f"reason=deviceDeleteAllFromMqttComplete,deviceId={self._id}")
 
     def clear_retained_topic(self, topic_path: str) -> bool:
         """
@@ -1160,24 +1265,24 @@ class Device:
         Returns True on success, False on failure
         """
         if not self.mqttc:
-            logger.warning(f'reason=deviceClearTopicNoMqttClient,topic={topic_path}')
+            logger.warning(f"reason=deviceClearTopicNoMqttClient,topic={topic_path}")
             return False
         try:
-            self.mqttc.publish(topic_path, '', retain=True, qos=EBUS_HOMIE_MQTT_QOS)
-            logger.info(f'reason=deviceClearedTopic,topic={topic_path}')
+            self.mqttc.publish(topic_path, "", retain=True, qos=EBUS_HOMIE_MQTT_QOS)
+            logger.info(f"reason=deviceClearedTopic,topic={topic_path}")
             return True
         except Exception as e:
-            logger.warning(f'reason=deviceClearTopicException,topic={topic_path},e={e}')
+            logger.warning(f"reason=deviceClearTopicException,topic={topic_path},e={e}")
             return False
 
     def _begin_state_transition(self) -> None:
         """Set device state to INIT to begin a state transition"""
-        logger.info(f'reason=deviceBeginStateTransition,deviceId={self._id}')
+        logger.info(f"reason=deviceBeginStateTransition,deviceId={self._id}")
         self.set_state(DeviceState.INIT)
 
     def _end_state_transition(self) -> None:
         """Set device state to READY and publish updated description"""
-        logger.info(f'reason=deviceEndStateTransition,deviceId={self._id}')
+        logger.info(f"reason=deviceEndStateTransition,deviceId={self._id}")
         self.publish_description()
         self.set_state(DeviceState.READY)
 
@@ -1195,32 +1300,34 @@ class Device:
 
     def refresh_all_nodes(self) -> None:
         """Republish entire device state (for reconnection)"""
-        logger.info(f'reason=deviceRefreshAllNodes,deviceId={self._id},nodeCount={len(self._nodes)}')
+        logger.info(
+            f"reason=deviceRefreshAllNodes,deviceId={self._id},nodeCount={len(self._nodes)}"
+        )
         self.publish_description()
         self.publish_nodes()
         self.publish_state()
 
-    def publish(self, attribute: str = '', value: Optional[Any] = None) -> None:
+    def publish(self, attribute: str = "", value: Optional[Any] = None) -> None:
         """
         Publishes the value argument to the device's attribute MQTT topic,
         or if the value is not provided, publishes the current (self) attribute value
         """
         if not self.mqttc:
-            logger.info(f'reason=devicePublishNoMqttClient,attribute={attribute}')
+            logger.info(f"reason=devicePublishNoMqttClient,attribute={attribute}")
             return
         if not self._id:
-            logger.info(f'reason=devicePublishNoDeviceID')
+            logger.info(f"reason=devicePublishNoDeviceID")
             return
         try:
-            base_topic = f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}/'
-            if attribute == '$state':
-                topic = base_topic + '$state'
+            base_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}/"
+            if attribute == "$state":
+                topic = base_topic + "$state"
                 if value:
                     payload = value
                 else:
                     payload = self._state
-            elif attribute == '$description':
-                topic = base_topic + '$description'
+            elif attribute == "$description":
+                topic = base_topic + "$description"
                 if value:
                     payload = json.dumps(value)
                 else:
@@ -1229,17 +1336,19 @@ class Device:
                         payload = json.dumps(description)
                     else:
                         payload = None
-            elif attribute == '$alert':
-                topic = base_topic + '$alert'
+            elif attribute == "$alert":
+                topic = base_topic + "$alert"
                 if value:
                     payload = value
                 else:
-                    logger.info(f'reason=devicePublishAlertNoValue,id={self._id}')
+                    logger.info(f"reason=devicePublishAlertNoValue,id={self._id}")
                     return
             if payload:
                 self.mqttc.publish(topic, payload, retain=True, qos=EBUS_HOMIE_MQTT_QOS)
         except Exception as e:
-            logger.exception(f'reason=devicePublishException,id={self._id},attribute={attribute},value={value},e={e}')
+            logger.exception(
+                f"reason=devicePublishException,id={self._id},attribute={attribute},value={value},e={e}"
+            )
 
     def publish_state(self, state: Optional[DeviceState] = None) -> None:
         """
@@ -1247,26 +1356,28 @@ class Device:
         or if state argument not provided, publishes value of self._state
         """
         if state:
-            self.publish('$state', value=state)
+            self.publish("$state", value=state)
         else:
-            self.publish('$state', value=self._state)
+            self.publish("$state", value=self._state)
 
     def publish_description(self, republish: bool = False) -> None:
         if republish:
-            self.publish('$description')
+            self.publish("$description")
         else:
             if self._state == DeviceState.READY:
                 # Need to transition first to INIT
                 self.publish_state(DeviceState.INIT)
-                self.publish('$description')
+                self.publish("$description")
                 # Now that we've republished, restore $state to ready
                 self.publish_state(DeviceState.READY)
             else:
                 # TODO: should we be able to publish if DISCONNECTED, SLEEPING, or LOST?
                 # If not in READY state, then we don't need to transition to INIT...
-                logger.info(f'reason=publishDescriptionNotRepublishNotReady,state={self._state.name}')
+                logger.info(
+                    f"reason=publishDescriptionNotRepublishNotReady,state={self._state.name}"
+                )
                 # Just publish description
-                self.publish('$description')
+                self.publish("$description")
 
     def publish_nodes(self) -> None:
         for node in self._nodes.values():
@@ -1278,15 +1389,19 @@ class Device:
         ATM the callback function signature has no arguments so use functools.partial to wrap this method
         Current intended use is to re-publish the Device's $state on connection (especially re-connection)
         """
-        logger.info(f'reason=deviceOnConnectInvocation,initialBrokerConnection={self.initial_broker_connection}')
+        logger.info(
+            f"reason=deviceOnConnectInvocation,initialBrokerConnection={self.initial_broker_connection}"
+        )
         if self.initial_broker_connection:
             self.initial_broker_connection = False
             # Also publish nodes on initial connection, FIX for G3P-19041
             self.publish_nodes()
         else:
-            logger.info(f'reason=deviceRepublishingAfterReconnect,nodeCount={len(self._nodes)}')
+            logger.info(
+                f"reason=deviceRepublishingAfterReconnect,nodeCount={len(self._nodes)}"
+            )
             for node_id in self._nodes.keys():
-                logger.debug(f'reason=deviceRepublishingNode,nodeId={node_id}')
+                logger.debug(f"reason=deviceRepublishingNode,nodeId={node_id}")
             self.publish_description(republish=True)
             self.publish_nodes()
             self.publish_state()
@@ -1299,27 +1414,31 @@ class Device:
         if self.mqttc:
             # If we already have a mqtt client, don't reconnect...
             return
-        lwt = {'topic': f'{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}/$state',
-               'payload': DeviceState.LOST.value}
+        lwt = {
+            "topic": f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}/$state",
+            "payload": DeviceState.LOST.value,
+        }
         try:
             self.mqttc = MqttClient.from_config(
                 mqtt_cfg=self._mqtt_cfg,
                 client_id=self._id,
                 lwt=lwt,
-                on_connect_callback=partial(self.on_connect)
+                on_connect_callback=partial(self.on_connect),
             )
         except Exception as e:
-            logger.warning(f'reason=deviceConnectBrokerException,e={e}')
+            logger.warning(f"reason=deviceConnectBrokerException,e={e}")
+
 
 def ebus_cfg_add_auth(cfg, username, password):
     """
     Add authentication to the config dictionary
     """
     from .mqtt import AUTH_TYPE_USER_PASS
-    cfg['authentication'] = {
+
+    cfg["authentication"] = {
         "type": AUTH_TYPE_USER_PASS,
         "username": username,
-        "password": password
+        "password": password,
     }
     return cfg
 
@@ -1329,6 +1448,7 @@ class DiscoveredDevice:
     Represents a device discovered by a Controller.
     Stores device metadata, description, and current property values.
     """
+
     def __init__(self, device_id: str, homie_domain: str = EBUS_HOMIE_DOMAIN):
         self.device_id = device_id
         self.homie_domain = homie_domain
@@ -1349,7 +1469,9 @@ class DiscoveredDevice:
             self.description = json.loads(description_json)
             self.last_seen = time.time()
         except json.JSONDecodeError as e:
-            logger.error(f'reason=descriptionParseError,deviceID={self.device_id},error={e}')
+            logger.error(
+                f"reason=descriptionParseError,deviceID={self.device_id},error={e}"
+            )
 
     def update_property(self, node_id: str, property_id: str, value: str) -> None:
         """Update a property value"""
@@ -1358,7 +1480,9 @@ class DiscoveredDevice:
         self.properties[node_id][property_id] = value
         self.last_seen = time.time()
 
-    def update_property_target(self, node_id: str, property_id: str, target: str) -> None:
+    def update_property_target(
+        self, node_id: str, property_id: str, target: str
+    ) -> None:
         """Update a property target value"""
         if node_id not in self.property_targets:
             self.property_targets[node_id] = {}
@@ -1375,17 +1499,17 @@ class DiscoveredDevice:
 
     def get_nodes(self) -> List[str]:
         """Get list of node IDs from description"""
-        if not self.description or 'nodes' not in self.description:
+        if not self.description or "nodes" not in self.description:
             return []
-        return list(self.description['nodes'].keys())
+        return list(self.description["nodes"].keys())
 
     def get_node_properties(self, node_id: str) -> dict:
         """Get properties dict for a node from description"""
-        if not self.description or 'nodes' not in self.description:
+        if not self.description or "nodes" not in self.description:
             return {}
-        nodes = self.description['nodes']
+        nodes = self.description["nodes"]
         if node_id in nodes:
-            return nodes[node_id].get('properties', {})
+            return nodes[node_id].get("properties", {})
         return {}
 
 
@@ -1411,11 +1535,13 @@ class Controller:
         controller.set_property('my-device-id', 'lights', 'power', 'true')
     """
 
-    def __init__(self,
-                 mqtt_cfg: Optional[dict] = {},
-                 homie_domain: str = EBUS_HOMIE_DOMAIN,
-                 auto_start: bool = False,
-                 device_id: Optional[str] = None):
+    def __init__(
+        self,
+        mqtt_cfg: Optional[dict] = {},
+        homie_domain: str = EBUS_HOMIE_DOMAIN,
+        auto_start: bool = False,
+        device_id: Optional[str] = None,
+    ):
         """
         Initialize a Homie Controller
 
@@ -1449,21 +1575,21 @@ class Controller:
         if self.mqttc:
             return
 
-        client_id = f'homie-controller-{uuid.uuid4()}'
+        client_id = f"homie-controller-{uuid.uuid4()}"
         try:
             self.mqttc = MqttClient.from_config(
                 mqtt_cfg=self._mqtt_cfg,
                 client_id=client_id,
-                on_connect_callback=partial(self._on_connect)
+                on_connect_callback=partial(self._on_connect),
             )
             self.mqttc.start(blocking=False)
-            logger.info(f'reason=controllerConnected,clientID={client_id}')
+            logger.info(f"reason=controllerConnected,clientID={client_id}")
         except Exception as e:
-            logger.exception(f'reason=controllerConnectException,error={e}')
+            logger.exception(f"reason=controllerConnectException,error={e}")
 
     def _on_connect(self) -> None:
         """Called when controller connects to MQTT broker"""
-        logger.info(f'reason=controllerOnConnect')
+        logger.info(f"reason=controllerOnConnect")
         # Re-subscribe to all topics on reconnect
         if self.devices:
             for device_id in self.devices.keys():
@@ -1481,7 +1607,7 @@ class Controller:
             homie_domain: Optional specific domain to monitor (default: uses instance domain)
         """
         if not self.mqttc:
-            logger.error('reason=discoveryFailedNoConnection')
+            logger.error("reason=discoveryFailedNoConnection")
             return
 
         domain = homie_domain or self.homie_domain
@@ -1489,8 +1615,8 @@ class Controller:
         if self.device_id:
             # Single-device mode: subscribe to exact topics, no wildcard
             # in the device-id position
-            base = f'{domain}/{EBUS_HOMIE_VERSION_MAJOR}/{self.device_id}'
-            logger.info(f'reason=startDiscoverySingleDevice,deviceID={self.device_id}')
+            base = f"{domain}/{EBUS_HOMIE_VERSION_MAJOR}/{self.device_id}"
+            logger.info(f"reason=startDiscoverySingleDevice,deviceID={self.device_id}")
 
             # Pre-create the DiscoveredDevice entry
             device = DiscoveredDevice(self.device_id, domain)
@@ -1498,35 +1624,35 @@ class Controller:
 
             # Subscribe to $state
             self.mqttc.subscribe(
-                f'{base}/$state',
+                f"{base}/$state",
                 param=self._on_state_message,
                 qos=EBUS_HOMIE_MQTT_QOS,
             )
             # Subscribe to $description
             self.mqttc.subscribe(
-                f'{base}/$description',
+                f"{base}/$description",
                 param=partial(self._on_description_message, self.device_id),
                 qos=EBUS_HOMIE_MQTT_QOS,
             )
             # Subscribe to all properties: {base}/{node_id}/{property_id}
             self.mqttc.subscribe(
-                f'{base}/+/+',
+                f"{base}/+/+",
                 param=partial(self._on_property_message, self.device_id),
                 qos=EBUS_HOMIE_MQTT_QOS,
             )
             # Subscribe to all property targets
             self.mqttc.subscribe(
-                f'{base}/+/+/$target',
+                f"{base}/+/+/$target",
                 param=partial(self._on_target_message, self.device_id),
                 qos=EBUS_HOMIE_MQTT_QOS,
             )
         else:
             # Wildcard discovery mode (original behavior)
-            discovery_topic = f'{domain}/{EBUS_HOMIE_VERSION_MAJOR}/+/$state'
-            logger.info(f'reason=startDiscovery,topic={discovery_topic}')
-            self.mqttc.subscribe(discovery_topic,
-                                param=self._on_state_message,
-                                qos=EBUS_HOMIE_MQTT_QOS)
+            discovery_topic = f"{domain}/{EBUS_HOMIE_VERSION_MAJOR}/+/$state"
+            logger.info(f"reason=startDiscovery,topic={discovery_topic}")
+            self.mqttc.subscribe(
+                discovery_topic, param=self._on_state_message, qos=EBUS_HOMIE_MQTT_QOS
+            )
 
     def _on_state_message(self, topic: str, payload: bytes) -> None:
         """
@@ -1535,20 +1661,20 @@ class Controller:
         Topic format: {domain}/5/{device_id}/$state
         Payload: init, ready, disconnected, sleeping, lost, or empty (device removal)
         """
-        parts = topic.split('/')
-        if len(parts) != 4 or parts[3] != '$state':
-            logger.warning(f'reason=invalidStateTopic,topic={topic}')
+        parts = topic.split("/")
+        if len(parts) != 4 or parts[3] != "$state":
+            logger.warning(f"reason=invalidStateTopic,topic={topic}")
             return
 
         homie_domain = parts[0]
         device_id = parts[2]
 
         # Decode payload
-        payload_str = payload.decode('utf-8') if isinstance(payload, bytes) else payload
+        payload_str = payload.decode("utf-8") if isinstance(payload, bytes) else payload
 
         # Empty payload indicates device removal
         if not payload_str or len(payload_str) == 0:
-            logger.info(f'reason=deviceRemoved,deviceID={device_id}')
+            logger.info(f"reason=deviceRemoved,deviceID={device_id}")
             if device_id in self.devices:
                 removed_device = self.devices[device_id]
                 del self.devices[device_id]
@@ -1560,7 +1686,9 @@ class Controller:
         if device_id not in self.devices:
             # New device discovered (wildcard mode only; single-device mode
             # pre-creates the entry in start_discovery)
-            logger.info(f'reason=deviceDiscovered,deviceID={device_id},state={payload_str},knownDevices={list(self.devices.keys())}')
+            logger.info(
+                f"reason=deviceDiscovered,deviceID={device_id},state={payload_str},knownDevices={list(self.devices.keys())}"
+            )
             device = DiscoveredDevice(device_id, homie_domain)
             device.update_state(payload_str)
             self.devices[device_id] = device
@@ -1574,7 +1702,9 @@ class Controller:
             # Pre-created entry (single-device mode): first $state message
             device = self.devices[device_id]
             device.update_state(payload_str)
-            logger.info(f'reason=deviceDiscovered,deviceID={device_id},state={payload_str},mode=singleDevice')
+            logger.info(
+                f"reason=deviceDiscovered,deviceID={device_id},state={payload_str},mode=singleDevice"
+            )
             if self._on_device_discovered:
                 self._on_device_discovered(device)
         else:
@@ -1585,49 +1715,61 @@ class Controller:
             # Only trigger callback if state actually changed
             if old_state != payload_str:
                 device.update_state(payload_str)
-                logger.info(f'reason=deviceStateChanged,deviceID={device_id},oldState={old_state},newState={payload_str}')
+                logger.info(
+                    f"reason=deviceStateChanged,deviceID={device_id},oldState={old_state},newState={payload_str}"
+                )
                 if self._on_device_state_changed:
                     self._on_device_state_changed(device, old_state, payload_str)
             else:
                 # Still update last_seen even if state didn't change
                 device.update_state(payload_str)
-                logger.debug(f'reason=deviceStateRefreshed,deviceID={device_id},state={payload_str}')
+                logger.debug(
+                    f"reason=deviceStateRefreshed,deviceID={device_id},state={payload_str}"
+                )
 
     def _subscribe_to_device(self, device_id: str) -> None:
         """Subscribe to all topics for a discovered device"""
         if not self.mqttc:
             return
 
-        base_topic = f'{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}'
+        base_topic = f"{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}"
 
         # Subscribe to $description
-        description_topic = f'{base_topic}/$description'
-        self.mqttc.subscribe(description_topic,
-                           param=partial(self._on_description_message, device_id),
-                           qos=EBUS_HOMIE_MQTT_QOS)
+        description_topic = f"{base_topic}/$description"
+        self.mqttc.subscribe(
+            description_topic,
+            param=partial(self._on_description_message, device_id),
+            qos=EBUS_HOMIE_MQTT_QOS,
+        )
 
         # Subscribe to all properties and targets
-        property_topic = f'{base_topic}/+/+'
-        self.mqttc.subscribe(property_topic,
-                           param=partial(self._on_property_message, device_id),
-                           qos=EBUS_HOMIE_MQTT_QOS)
+        property_topic = f"{base_topic}/+/+"
+        self.mqttc.subscribe(
+            property_topic,
+            param=partial(self._on_property_message, device_id),
+            qos=EBUS_HOMIE_MQTT_QOS,
+        )
 
         # Subscribe to all property targets
-        target_topic = f'{base_topic}/+/+/$target'
-        self.mqttc.subscribe(target_topic,
-                           param=partial(self._on_target_message, device_id),
-                           qos=EBUS_HOMIE_MQTT_QOS)
+        target_topic = f"{base_topic}/+/+/$target"
+        self.mqttc.subscribe(
+            target_topic,
+            param=partial(self._on_target_message, device_id),
+            qos=EBUS_HOMIE_MQTT_QOS,
+        )
 
-    def _on_description_message(self, device_id: str, topic: str, payload: bytes) -> None:
+    def _on_description_message(
+        self, device_id: str, topic: str, payload: bytes
+    ) -> None:
         """Handle device $description messages"""
         if device_id not in self.devices:
             return
 
-        payload_str = payload.decode('utf-8') if isinstance(payload, bytes) else payload
+        payload_str = payload.decode("utf-8") if isinstance(payload, bytes) else payload
         device = self.devices[device_id]
         device.update_description(payload_str)
 
-        logger.info(f'reason=descriptionReceived,deviceID={device_id}')
+        logger.info(f"reason=descriptionReceived,deviceID={device_id}")
         if self._on_description_received:
             self._on_description_received(device)
 
@@ -1639,10 +1781,10 @@ class Controller:
         Skip $target topics (handled separately)
         """
         # Skip $target topics
-        if topic.endswith('/$target'):
+        if topic.endswith("/$target"):
             return
 
-        parts = topic.split('/')
+        parts = topic.split("/")
         if len(parts) != 5:
             return
 
@@ -1650,20 +1792,24 @@ class Controller:
         property_id = parts[4]
 
         # Skip attribute topics (starting with $)
-        if property_id.startswith('$'):
+        if property_id.startswith("$"):
             return
 
         if device_id not in self.devices:
             return
 
-        payload_str = payload.decode('utf-8') if isinstance(payload, bytes) else payload
+        payload_str = payload.decode("utf-8") if isinstance(payload, bytes) else payload
         device = self.devices[device_id]
         old_value = device.get_property(node_id, property_id)
         device.update_property(node_id, property_id, payload_str)
 
-        logger.debug(f'reason=propertyChanged,deviceID={device_id},node={node_id},property={property_id},value={payload_str}')
+        logger.debug(
+            f"reason=propertyChanged,deviceID={device_id},node={node_id},property={property_id},value={payload_str}"
+        )
         if self._on_property_changed:
-            self._on_property_changed(device_id, node_id, property_id, payload_str, old_value)
+            self._on_property_changed(
+                device_id, node_id, property_id, payload_str, old_value
+            )
 
     def _on_target_message(self, device_id: str, topic: str, payload: bytes) -> None:
         """
@@ -1671,8 +1817,8 @@ class Controller:
 
         Topic format: {domain}/5/{device_id}/{node_id}/{property_id}/$target
         """
-        parts = topic.split('/')
-        if len(parts) != 6 or parts[5] != '$target':
+        parts = topic.split("/")
+        if len(parts) != 6 or parts[5] != "$target":
             return
 
         node_id = parts[3]
@@ -1681,13 +1827,22 @@ class Controller:
         if device_id not in self.devices:
             return
 
-        payload_str = payload.decode('utf-8') if isinstance(payload, bytes) else payload
+        payload_str = payload.decode("utf-8") if isinstance(payload, bytes) else payload
         device = self.devices[device_id]
         device.update_property_target(node_id, property_id, payload_str)
 
-        logger.debug(f'reason=targetChanged,deviceID={device_id},node={node_id},property={property_id},target={payload_str}')
+        logger.debug(
+            f"reason=targetChanged,deviceID={device_id},node={node_id},property={property_id},target={payload_str}"
+        )
 
-    def set_property(self, device_id: str, node_id: str, property_id: str, value: str, qos: int = EBUS_HOMIE_MQTT_QOS) -> bool:
+    def set_property(
+        self,
+        device_id: str,
+        node_id: str,
+        property_id: str,
+        value: str,
+        qos: int = EBUS_HOMIE_MQTT_QOS,
+    ) -> bool:
         """
         Send a command to set a device property
 
@@ -1705,21 +1860,23 @@ class Controller:
             True if message was sent successfully, False otherwise
         """
         if not self.mqttc:
-            logger.error('reason=setPropertyFailedNoConnection')
+            logger.error("reason=setPropertyFailedNoConnection")
             return False
 
-        set_topic = f'{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{property_id}/set'
+        set_topic = f"{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{property_id}/set"
 
-        logger.info(f'reason=settingProperty,topic={set_topic},value={value}')
+        logger.info(f"reason=settingProperty,topic={set_topic},value={value}")
         try:
             # Non-retained message as per convention
             self.mqttc.publish(set_topic, value, qos=qos, retain=False)
             return True
         except Exception as e:
-            logger.error(f'reason=setPropertyException,error={e}')
+            logger.error(f"reason=setPropertyException,error={e}")
             return False
 
-    def broadcast(self, subtopic: str, message: str, qos: int = EBUS_HOMIE_MQTT_QOS) -> bool:
+    def broadcast(
+        self, subtopic: str, message: str, qos: int = EBUS_HOMIE_MQTT_QOS
+    ) -> bool:
         """
         Broadcast a message to all Homie devices
 
@@ -1734,17 +1891,19 @@ class Controller:
             True if message was sent successfully, False otherwise
         """
         if not self.mqttc:
-            logger.error('reason=broadcastFailedNoConnection')
+            logger.error("reason=broadcastFailedNoConnection")
             return False
 
-        broadcast_topic = f'{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/$broadcast/{subtopic}'
+        broadcast_topic = (
+            f"{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/$broadcast/{subtopic}"
+        )
 
-        logger.info(f'reason=broadcasting,topic={broadcast_topic}')
+        logger.info(f"reason=broadcasting,topic={broadcast_topic}")
         try:
             self.mqttc.publish(broadcast_topic, message, qos=qos, retain=False)
             return True
         except Exception as e:
-            logger.error(f'reason=broadcastException,error={e}')
+            logger.error(f"reason=broadcastException,error={e}")
             return False
 
     def get_device(self, device_id: str) -> Optional[DiscoveredDevice]:
@@ -1758,7 +1917,7 @@ class Controller:
     def stop(self) -> None:
         """Stop the controller, release resources, and disconnect from broker"""
         if self.mqttc:
-            logger.info(f'reason=stoppingController,deviceCount={len(self.devices)}')
+            logger.info(f"reason=stoppingController,deviceCount={len(self.devices)}")
             self.mqttc.stop()
             self.mqttc = None
         # Release DiscoveredDevice objects and their property dicts
@@ -1771,22 +1930,32 @@ class Controller:
         self._on_description_received = None
 
     # Callback setters
-    def set_on_device_discovered_callback(self, callback: Callable[[DiscoveredDevice], None]) -> None:
+    def set_on_device_discovered_callback(
+        self, callback: Callable[[DiscoveredDevice], None]
+    ) -> None:
         """Set callback for when a new device is discovered"""
         self._on_device_discovered = callback
 
-    def set_on_device_state_changed_callback(self, callback: Callable[[DiscoveredDevice, str, str], None]) -> None:
+    def set_on_device_state_changed_callback(
+        self, callback: Callable[[DiscoveredDevice, str, str], None]
+    ) -> None:
         """Set callback for when a device state changes (device, old_state, new_state)"""
         self._on_device_state_changed = callback
 
-    def set_on_device_removed_callback(self, callback: Callable[[DiscoveredDevice], None]) -> None:
+    def set_on_device_removed_callback(
+        self, callback: Callable[[DiscoveredDevice], None]
+    ) -> None:
         """Set callback for when a device is removed"""
         self._on_device_removed = callback
 
-    def set_on_property_changed_callback(self, callback: Callable[[str, str, str, str, Optional[str]], None]) -> None:
+    def set_on_property_changed_callback(
+        self, callback: Callable[[str, str, str, str, Optional[str]], None]
+    ) -> None:
         """Set callback for property changes (device_id, node_id, property_id, new_value, old_value)"""
         self._on_property_changed = callback
 
-    def set_on_description_received_callback(self, callback: Callable[[DiscoveredDevice], None]) -> None:
+    def set_on_description_received_callback(
+        self, callback: Callable[[DiscoveredDevice], None]
+    ) -> None:
         """Set callback for when a device description is received"""
         self._on_description_received = callback

@@ -5,16 +5,19 @@ from enum import Enum
 from threading import Lock, RLock
 from typing import List, Callable, Union, Optional, Any, Type, Dict
 
+
 class ChangeEvent(Enum):
     """Events fired by GroupedPropertyDict"""
-    GROUP_CREATED = 'group_created'
-    GROUP_DELETED = 'group_deleted'
-    PROPERTY_ADDED = 'property_added'
-    PROPERTY_REMOVED = 'property_removed'
-    PROPERTY_CHANGED = 'property_changed'
-    BULK_UPDATE = 'bulk_update'
 
-class Property():
+    GROUP_CREATED = "group_created"
+    GROUP_DELETED = "group_deleted"
+    PROPERTY_ADDED = "property_added"
+    PROPERTY_REMOVED = "property_removed"
+    PROPERTY_CHANGED = "property_changed"
+    BULK_UPDATE = "bulk_update"
+
+
+class Property:
     """
     A Property is modeled (very) loosely on a Homie Property
     (https://homieiot.github.io/specification/)
@@ -31,13 +34,16 @@ class Property():
       which is valuable/useful because often the client doesn't have access to the enum itself (due to scoping)
     All methods/operations are intended to be thread-safe, please file an issue if you beleive otherwise
     """
-    def __init__(self,
-                 id: Optional[str] = None,
-                 value: Any = None,
-                 type: Union[Type, str, None] = None,
-                 format: Optional[str] = None,
-                 entity_setter: Optional[Callable] = None,
-                 from_dict: dict = {}):
+
+    def __init__(
+        self,
+        id: Optional[str] = None,
+        value: Any = None,
+        type: Union[Type, str, None] = None,
+        format: Optional[str] = None,
+        entity_setter: Optional[Callable] = None,
+        from_dict: dict = {},
+    ):
         self._lock = Lock()
         self._change_callbacks = {}
         self._set_callbacks = {}
@@ -49,14 +55,14 @@ class Property():
             self._format = format
             self._entity_setter = entity_setter
         else:
-            self._id = from_dict.get('id')
-            self._value = from_dict.get('value', None)
-            self._type = from_dict.get('type', None)
-            self._format = from_dict.get('format', None)
-            self._entity_setter = from_dict.get('entity_setter', None)
+            self._id = from_dict.get("id")
+            self._value = from_dict.get("value", None)
+            self._type = from_dict.get("type", None)
+            self._format = from_dict.get("format", None)
+            self._entity_setter = from_dict.get("entity_setter", None)
         if not self._id:
             # Specifying the id is required!
-            logging.warning(f'reason=propertyInitNoIdSpecified!')
+            logging.warning(f"reason=propertyInitNoIdSpecified!")
             # TODO, throw an exception?
 
     def id(self) -> str:
@@ -122,7 +128,9 @@ class Property():
                 self._set_callbacks.pop(callback_id, None)
                 return True
             else:
-                logging.warning(f'removeCallbackNoSuchId,callbackId={callback_id},propertyId={self._id}')
+                logging.warning(
+                    f"removeCallbackNoSuchId,callbackId={callback_id},propertyId={self._id}"
+                )
 
     def set_value(self, new_value: Any) -> Any:
         """
@@ -142,14 +150,18 @@ class Property():
             try:
                 callback(self)
             except Exception as e:
-                logging.warning(f'reason=setValueOnSetCallbackException,propertyId={self._id},newValue={new_value},callbackId={callback_id},e={e}')
+                logging.warning(
+                    f"reason=setValueOnSetCallbackException,propertyId={self._id},newValue={new_value},callbackId={callback_id},e={e}"
+                )
         # Do we need to invoke on_change callbacks?
         if new_value != old_value:
             for callback_id, callback in on_change_callback_items:
                 try:
                     callback(self)
                 except Exception as e:
-                    logging.warning(f'reason=setValueOnChangeCallbackException,propertyId={self._id},newValue={new_value},callbackId={callback_id}')
+                    logging.warning(
+                        f"reason=setValueOnChangeCallbackException,propertyId={self._id},newValue={new_value},callbackId={callback_id}"
+                    )
         return new_value
 
     def set_entity(self, new_value: Any) -> Any:
@@ -161,13 +173,17 @@ class Property():
         Returns the new value
         """
         if self._entity_setter:
-            logging.info(f'reason=setEntity,propertyId={self._id},new_value={new_value}')
+            logging.info(
+                f"reason=setEntity,propertyId={self._id},new_value={new_value}"
+            )
             try:
                 self._entity_setter(new_value)
             except Exception as e:
-                logging.warning(f'reason=setEntityException,propertyId={self._id},new_value={new_value},e={e}')
+                logging.warning(
+                    f"reason=setEntityException,propertyId={self._id},new_value={new_value},e={e}"
+                )
         else:
-            logging.warning(f'reason=setEntityNoSetter,propertyId={self._id}')
+            logging.warning(f"reason=setEntityNoSetter,propertyId={self._id}")
         return new_value
 
     def set_entity_setter(self, entity_setter: Callable) -> None:
@@ -180,8 +196,10 @@ class Property():
     def as_dict(self) -> dict:
         return vars(self)
 
+
 class BulkUpdateContext:
     """Context manager for bulk updates to GroupedPropertyDict"""
+
     def __init__(self, grouped_dict):
         self.grouped_dict = grouped_dict
         self.pending_events = []
@@ -200,16 +218,19 @@ class BulkUpdateContext:
                 try:
                     callback(ChangeEvent.BULK_UPDATE, changes=self.pending_events)
                 except Exception as e:
-                    logging.warning(f'reason=bulkUpdateObserverException,observerId={observer_id},e={e}')
+                    logging.warning(
+                        f"reason=bulkUpdateObserverException,observerId={observer_id},e={e}"
+                    )
         return False
 
     def add_event(self, event_type: ChangeEvent, **kwargs):
         """Add event to pending list"""
-        event = {'event_type': event_type}
+        event = {"event_type": event_type}
         event.update(kwargs)
         self.pending_events.append(event)
 
-class PropertyDict():
+
+class PropertyDict:
     """
     PropertyDict is a dict of Property objects keyed by property.id.
     All methods/operations are intended to be thread-safe, please file an issue if you believe otherwise.
@@ -227,7 +248,7 @@ class PropertyDict():
         """
         with self._lock:
             if id not in self._properties:
-                logging.debug(f'reason=propertyDictNoPropertyByThatId,id={id}')
+                logging.debug(f"reason=propertyDictNoPropertyByThatId,id={id}")
             return self._properties.get(id, None)
 
     def has_property(self, id: str) -> bool:
@@ -292,7 +313,9 @@ class PropertyDict():
         """
         this_property = self.get(id)
         if not this_property:
-            logging.warning(f'reason=setPropertyValueNoPropertyByThatId,id={id},value={value}')
+            logging.warning(
+                f"reason=setPropertyValueNoPropertyByThatId,id={id},value={value}"
+            )
             return None
         # set_value() is thread-safe for Property
         return this_property.set_value(value)
@@ -301,7 +324,9 @@ class PropertyDict():
         """Calls the entity_setter of Property id. Returns the new value."""
         this_property = self.get(id)
         if not this_property:
-            logging.warning(f'reason=propertyDictSetEntityNoPropertyByThatId,id={id},value={value}')
+            logging.warning(
+                f"reason=propertyDictSetEntityNoPropertyByThatId,id={id},value={value}"
+            )
             return None
         return this_property.set_entity(value)
 
@@ -309,15 +334,21 @@ class PropertyDict():
         """Sets entity_setter on Property id"""
         this_property = self.get(id)
         if not this_property:
-            logging.warning(f'reason=propertyDictSetEntitySetterNoPropertyByThatId,id={id}')
+            logging.warning(
+                f"reason=propertyDictSetEntitySetterNoPropertyByThatId,id={id}"
+            )
             return None
         this_property.set_entity_setter(callback)
 
-    def add_on_change_callback(self, id: str, callback: Callable) -> Optional[uuid.UUID]:
+    def add_on_change_callback(
+        self, id: str, callback: Callable
+    ) -> Optional[uuid.UUID]:
         """Adds on_change callback to Property id. Returns callback_id."""
         this_property = self.get(id)
         if not this_property:
-            logging.warning(f'reason=propertyDictAddOnChangeCallbackNoPropertyByThatId,id={id}')
+            logging.warning(
+                f"reason=propertyDictAddOnChangeCallbackNoPropertyByThatId,id={id}"
+            )
             return None
         return this_property.add_on_change_callback(callback)
 
@@ -325,7 +356,9 @@ class PropertyDict():
         """Adds on_set callback to Property id. Returns callback_id."""
         this_property = self.get(id)
         if not this_property:
-            logging.warning(f'reason=propertyDictAddOnSetCallbackNoPropertyByThatId,id={id}')
+            logging.warning(
+                f"reason=propertyDictAddOnSetCallbackNoPropertyByThatId,id={id}"
+            )
             return None
         return this_property.add_on_set_callback(callback)
 
@@ -333,7 +366,9 @@ class PropertyDict():
         """Removes callback from Property id. Returns True if successful."""
         this_property = self.get(id)
         if not this_property:
-            logging.warning(f'reason=propertyDictRemoveCallbackNoPropertyByThatId,id={id}')
+            logging.warning(
+                f"reason=propertyDictRemoveCallbackNoPropertyByThatId,id={id}"
+            )
             return False
         return this_property.remove_callback(callback_id)
 
@@ -358,7 +393,8 @@ class PropertyDict():
             returned_dict[id] = property.as_dict()
         return returned_dict
 
-class GroupedPropertyDict():
+
+class GroupedPropertyDict:
     """
     GroupedPropertyDict is a dict of PropertyDict instances,
     keyed by group name. Each PropertyDict contains Property instances keyed by property.id.
@@ -370,7 +406,9 @@ class GroupedPropertyDict():
     """
 
     def __init__(self):
-        self._lock = RLock()  # RLock needed because _fire_event is called while holding lock
+        self._lock = (
+            RLock()
+        )  # RLock needed because _fire_event is called while holding lock
         self._groups = {}
         self._observers = {}
         self._bulk_mode = False
@@ -387,7 +425,9 @@ class GroupedPropertyDict():
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.debug(f'reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}')
+            logging.debug(
+                f"reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}"
+            )
             return None
         return pd.value(id)
 
@@ -397,7 +437,9 @@ class GroupedPropertyDict():
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.debug(f'reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}')
+            logging.debug(
+                f"reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}"
+            )
             return None
         return pd.type(id)
 
@@ -407,7 +449,9 @@ class GroupedPropertyDict():
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.debug(f'reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}')
+            logging.debug(
+                f"reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}"
+            )
             return None
         return pd.format(id)
 
@@ -417,18 +461,22 @@ class GroupedPropertyDict():
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.debug(f'reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}')
+            logging.debug(
+                f"reason=groupedPropertiesGetNoGroupByThatName,group={group},id={id}"
+            )
             return None
         return pd.get(id)
 
     def create_group(self, group_name: str) -> None:
         """Explicitly create a new group"""
         if not isinstance(group_name, str) or not group_name:
-            logging.warning(f'reason=createGroupInvalidGroupName,groupName={group_name},type={type(group_name).__name__}')
+            logging.warning(
+                f"reason=createGroupInvalidGroupName,groupName={group_name},type={type(group_name).__name__}"
+            )
             return
         with self._lock:
             if group_name in self._groups:
-                logging.warning(f'reason=groupAlreadyExists,groupName={group_name}')
+                logging.warning(f"reason=groupAlreadyExists,groupName={group_name}")
                 return
             self._groups[group_name] = PropertyDict()
             self._fire_event(ChangeEvent.GROUP_CREATED, group_name=group_name)
@@ -437,7 +485,7 @@ class GroupedPropertyDict():
         """Delete a group and all its properties"""
         with self._lock:
             if group_name not in self._groups:
-                logging.warning(f'reason=deleteGroupNotFound,groupName={group_name}')
+                logging.warning(f"reason=deleteGroupNotFound,groupName={group_name}")
                 return
             del self._groups[group_name]
             self._fire_event(ChangeEvent.GROUP_DELETED, group_name=group_name)
@@ -446,14 +494,20 @@ class GroupedPropertyDict():
         """Delete a specific property from a group"""
         with self._lock:
             if group not in self._groups:
-                logging.warning(f'reason=deletePropertyGroupNotFound,group={group},propertyId={property_id}')
+                logging.warning(
+                    f"reason=deletePropertyGroupNotFound,group={group},propertyId={property_id}"
+                )
                 return
             pd = self._groups[group]
             if not pd.has_property(property_id):
-                logging.warning(f'reason=deletePropertyNotFound,group={group},propertyId={property_id}')
+                logging.warning(
+                    f"reason=deletePropertyNotFound,group={group},propertyId={property_id}"
+                )
                 return
             pd.delete_property(property_id)
-            self._fire_event(ChangeEvent.PROPERTY_REMOVED, group_name=group, property_id=property_id)
+            self._fire_event(
+                ChangeEvent.PROPERTY_REMOVED, group_name=group, property_id=property_id
+            )
 
     def group_exists(self, group_name: str) -> bool:
         """Check if a group exists"""
@@ -465,7 +519,9 @@ class GroupedPropertyDict():
         Adds Property to the group, returns the Property
         """
         if not isinstance(group, str) or not group:
-            logging.warning(f'reason=addPropertyInvalidGroupName,group={group},type={type(group).__name__}')
+            logging.warning(
+                f"reason=addPropertyInvalidGroupName,group={group},type={type(group).__name__}"
+            )
             return None
         # id() thread-safe for Property
         property_id = property.id()
@@ -475,7 +531,12 @@ class GroupedPropertyDict():
                 self._groups[group] = PropertyDict()
                 self._fire_event(ChangeEvent.GROUP_CREATED, group_name=group)
             self._groups[group].add_property(property)
-            self._fire_event(ChangeEvent.PROPERTY_ADDED, group_name=group, property_id=property_id, property=property)
+            self._fire_event(
+                ChangeEvent.PROPERTY_ADDED,
+                group_name=group,
+                property_id=property_id,
+                property=property,
+            )
             return property
 
     def add_property_from_dict(self, group: str, property_dict: dict = {}) -> Property:
@@ -487,42 +548,58 @@ class GroupedPropertyDict():
         # add_property() itself is thread-safe, so no lock needed here
         return self.add_property(group, property)
 
-    def add_property_on_change_callback(self, group: str, id: str, callback: Callable) -> uuid.UUID:
+    def add_property_on_change_callback(
+        self, group: str, id: str, callback: Callable
+    ) -> uuid.UUID:
         """
         Adds callback to the list of callbacks that will be called when the Property group.id is set to a changed value
         Returns a callback_id, (a uuid1) that can be used subsequently to remove the callback
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.warning(f'reason=groupedPropertiesAddPropertyOnChangeCallbackNoPropertyByThatId,group={group},id={id}')
+            logging.warning(
+                f"reason=groupedPropertiesAddPropertyOnChangeCallbackNoPropertyByThatId,group={group},id={id}"
+            )
             return None
         result = pd.add_on_change_callback(id, callback)
         if result is None:
-            logging.warning(f'reason=groupedPropertiesAddPropertyOnChangeCallbackNoPropertyByThatId,group={group},id={id}')
+            logging.warning(
+                f"reason=groupedPropertiesAddPropertyOnChangeCallbackNoPropertyByThatId,group={group},id={id}"
+            )
         return result
 
-    def add_property_on_set_callback(self, group: str, id: str, callback: Callable) -> uuid.UUID:
+    def add_property_on_set_callback(
+        self, group: str, id: str, callback: Callable
+    ) -> uuid.UUID:
         """
         Adds callback to the list of callbacks that will be called when the Property group.id is set
         Returns a callback_id, (a uuid1) that can be used subsequently to remove the callback
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.warning(f'reason=groupedPropertiesAddPropertyOnSetCallbackNoPropertyByThatId,group={group},id={id}')
+            logging.warning(
+                f"reason=groupedPropertiesAddPropertyOnSetCallbackNoPropertyByThatId,group={group},id={id}"
+            )
             return None
         result = pd.add_on_set_callback(id, callback)
         if result is None:
-            logging.warning(f'reason=groupedPropertiesAddPropertyOnSetCallbackNoPropertyByThatId,group={group},id={id}')
+            logging.warning(
+                f"reason=groupedPropertiesAddPropertyOnSetCallbackNoPropertyByThatId,group={group},id={id}"
+            )
         return result
 
-    def remove_property_callback(self, group: str, id: str, callback_id: uuid.UUID) -> bool:
+    def remove_property_callback(
+        self, group: str, id: str, callback_id: uuid.UUID
+    ) -> bool:
         """
         Removes the callback associated with callback_id from the "list" of callbacks for Property group.id
         Returns True if successful, False if callback_id not found
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.warning(f'reason=groupedPropertiesRemovePropertyCallbackNoPropertyByThatId,group={group},id={id}')
+            logging.warning(
+                f"reason=groupedPropertiesRemovePropertyCallbackNoPropertyByThatId,group={group},id={id}"
+            )
             return False
         return pd.remove_callback(id, callback_id)
 
@@ -533,21 +610,27 @@ class GroupedPropertyDict():
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.warning(f'reason=groupedPropertiesSetValueNoGroupByThatName,group={group},id={id},value={value}')
+            logging.warning(
+                f"reason=groupedPropertiesSetValueNoGroupByThatName,group={group},id={id},value={value}"
+            )
             return None
         this_property = pd.get(id)
         if not this_property:
-            logging.warning(f'reason=groupedPropertiesSetValueNoPropertyByThatId,group={group},id={id},value={value}')
+            logging.warning(
+                f"reason=groupedPropertiesSetValueNoPropertyByThatId,group={group},id={id},value={value}"
+            )
             return None
         old_value = this_property.value()
         result = this_property.set_value(value)
         if old_value != value:
-            self._fire_event(ChangeEvent.PROPERTY_CHANGED,
-                             group_name=group,
-                             property_id=id,
-                             property=this_property,
-                             old_value=old_value,
-                             new_value=value)
+            self._fire_event(
+                ChangeEvent.PROPERTY_CHANGED,
+                group_name=group,
+                property_id=id,
+                property=this_property,
+                old_value=old_value,
+                new_value=value,
+            )
         return result
 
     def set_entity(self, group: str, id: str, value: Any) -> Any:
@@ -556,10 +639,12 @@ class GroupedPropertyDict():
         Returns the new value
         """
         # TODO change .info to .debug
-        logging.info(f'reason=groupedProperties,group={group},id={id},value={value}')
+        logging.info(f"reason=groupedProperties,group={group},id={id},value={value}")
         pd = self._get_group(group)
         if pd is None:
-            logging.warning(f'reason=groupedPropertiesSetEntityNoGroupByThatName,group={group},id={id},value={value}')
+            logging.warning(
+                f"reason=groupedPropertiesSetEntityNoGroupByThatName,group={group},id={id},value={value}"
+            )
             return None
         return pd.set_entity(id, value)
 
@@ -569,7 +654,9 @@ class GroupedPropertyDict():
         """
         pd = self._get_group(group)
         if pd is None:
-            logging.warning(f'reason=groupedPropertiesSetEntitySetterNoPropertyByThatId,group={group},id={id}')
+            logging.warning(
+                f"reason=groupedPropertiesSetEntitySetterNoPropertyByThatId,group={group},id={id}"
+            )
             return None
         return pd.set_entity_setter(id, callback)
 
@@ -594,8 +681,12 @@ class GroupedPropertyDict():
                 returned_dict[group_name] = pd.as_dict()
             return returned_dict
 
-    def add_observer(self, callback: Callable, event_types: List[ChangeEvent] = None,
-                    group_filter: str = None) -> uuid.UUID:
+    def add_observer(
+        self,
+        callback: Callable,
+        event_types: List[ChangeEvent] = None,
+        group_filter: str = None,
+    ) -> uuid.UUID:
         """
         Register an observer for changes
         callback signature: callback(event_type: ChangeEvent, **kwargs)
@@ -604,7 +695,7 @@ class GroupedPropertyDict():
         observer_id = uuid.uuid1()
         with self._lock:
             self._observers[observer_id] = callback
-        logging.info(f'reason=observerRegistered,observerId={observer_id}')
+        logging.info(f"reason=observerRegistered,observerId={observer_id}")
         return observer_id
 
     def remove_observer(self, observer_id: uuid.UUID) -> bool:
@@ -612,7 +703,7 @@ class GroupedPropertyDict():
         with self._lock:
             if observer_id in self._observers:
                 del self._observers[observer_id]
-                logging.info(f'reason=observerRemoved,observerId={observer_id}')
+                logging.info(f"reason=observerRemoved,observerId={observer_id}")
                 return True
             return False
 
@@ -633,7 +724,9 @@ class GroupedPropertyDict():
                 try:
                     callback(event_type, **kwargs)
                 except Exception as e:
-                    logging.warning(f'reason=observerCallbackException,observerId={observer_id},eventType={event_type},e={e}')
+                    logging.warning(
+                        f"reason=observerCallbackException,observerId={observer_id},eventType={event_type},e={e}"
+                    )
 
     def get_groups_by_property_value(self, property_id: str, value: Any) -> List[str]:
         """
