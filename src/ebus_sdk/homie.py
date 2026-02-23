@@ -1414,7 +1414,8 @@ class Controller:
     def __init__(self,
                  mqtt_cfg: Optional[dict] = {},
                  homie_domain: str = EBUS_HOMIE_DOMAIN,
-                 auto_start: bool = False):
+                 auto_start: bool = False,
+                 device_id: Optional[str] = None):
         """
         Initialize a Homie Controller
 
@@ -1422,8 +1423,10 @@ class Controller:
             mqtt_cfg: MQTT broker configuration (same format as Device class)
             homie_domain: Homie domain to monitor (default: 'ebus')
             auto_start: If True, automatically start discovery on init
+            device_id: If set, subscribe only to this specific device (no wildcards)
         """
         self.homie_domain = homie_domain
+        self.device_id = device_id
         self._mqtt_cfg = mqtt_cfg
         self.mqttc = None
         self.devices = {}  # {device_id: DiscoveredDevice}
@@ -1470,8 +1473,9 @@ class Controller:
         """
         Start auto-discovery of Homie devices
 
-        Subscribes to the discovery topic pattern: +/5/+/$state
-        Controllers can optionally restrict to a specific homie_domain
+        When device_id is set, subscribes to exact topics for that single device
+        (no wildcard in the device-id position). Otherwise, subscribes to the
+        wildcard discovery topic pattern: {domain}/5/+/$state
 
         Args:
             homie_domain: Optional specific domain to monitor (default: uses instance domain)
@@ -1481,12 +1485,48 @@ class Controller:
             return
 
         domain = homie_domain or self.homie_domain
-        discovery_topic = f'{domain}/{EBUS_HOMIE_VERSION_MAJOR}/+/$state'
 
-        logger.info(f'reason=startDiscovery,topic={discovery_topic}')
-        self.mqttc.subscribe(discovery_topic,
-                            param=self._on_state_message,
-                            qos=EBUS_HOMIE_MQTT_QOS)
+        if self.device_id:
+            # Single-device mode: subscribe to exact topics, no wildcard
+            # in the device-id position
+            base = f'{domain}/{EBUS_HOMIE_VERSION_MAJOR}/{self.device_id}'
+            logger.info(f'reason=startDiscoverySingleDevice,deviceID={self.device_id}')
+
+            # Pre-create the DiscoveredDevice entry
+            device = DiscoveredDevice(self.device_id, domain)
+            self.devices[self.device_id] = device
+
+            # Subscribe to $state
+            self.mqttc.subscribe(
+                f'{base}/$state',
+                param=self._on_state_message,
+                qos=EBUS_HOMIE_MQTT_QOS,
+            )
+            # Subscribe to $description
+            self.mqttc.subscribe(
+                f'{base}/$description',
+                param=partial(self._on_description_message, self.device_id),
+                qos=EBUS_HOMIE_MQTT_QOS,
+            )
+            # Subscribe to all properties: {base}/{node_id}/{property_id}
+            self.mqttc.subscribe(
+                f'{base}/+/+',
+                param=partial(self._on_property_message, self.device_id),
+                qos=EBUS_HOMIE_MQTT_QOS,
+            )
+            # Subscribe to all property targets
+            self.mqttc.subscribe(
+                f'{base}/+/+/$target',
+                param=partial(self._on_target_message, self.device_id),
+                qos=EBUS_HOMIE_MQTT_QOS,
+            )
+        else:
+            # Wildcard discovery mode (original behavior)
+            discovery_topic = f'{domain}/{EBUS_HOMIE_VERSION_MAJOR}/+/$state'
+            logger.info(f'reason=startDiscovery,topic={discovery_topic}')
+            self.mqttc.subscribe(discovery_topic,
+                                param=self._on_state_message,
+                                qos=EBUS_HOMIE_MQTT_QOS)
 
     def _on_state_message(self, topic: str, payload: bytes) -> None:
         """
@@ -1518,7 +1558,8 @@ class Controller:
 
         # New or existing device
         if device_id not in self.devices:
-            # New device discovered
+            # New device discovered (wildcard mode only; single-device mode
+            # pre-creates the entry in start_discovery)
             logger.info(f'reason=deviceDiscovered,deviceID={device_id},state={payload_str},knownDevices={list(self.devices.keys())}')
             device = DiscoveredDevice(device_id, homie_domain)
             device.update_state(payload_str)
@@ -1527,6 +1568,13 @@ class Controller:
             # Subscribe to device's $description and all properties
             self._subscribe_to_device(device_id)
 
+            if self._on_device_discovered:
+                self._on_device_discovered(device)
+        elif self.devices[device_id].state is None:
+            # Pre-created entry (single-device mode): first $state message
+            device = self.devices[device_id]
+            device.update_state(payload_str)
+            logger.info(f'reason=deviceDiscovered,deviceID={device_id},state={payload_str},mode=singleDevice')
             if self._on_device_discovered:
                 self._on_device_discovered(device)
         else:
@@ -1708,11 +1756,19 @@ class Controller:
         return self.devices.copy()
 
     def stop(self) -> None:
-        """Stop the controller and disconnect from broker"""
+        """Stop the controller, release resources, and disconnect from broker"""
         if self.mqttc:
-            logger.info('reason=stoppingController')
+            logger.info(f'reason=stoppingController,deviceCount={len(self.devices)}')
             self.mqttc.stop()
             self.mqttc = None
+        # Release DiscoveredDevice objects and their property dicts
+        self.devices.clear()
+        # Clear callback references to break reference cycles
+        self._on_device_discovered = None
+        self._on_device_state_changed = None
+        self._on_device_removed = None
+        self._on_property_changed = None
+        self._on_description_received = None
 
     # Callback setters
     def set_on_device_discovered_callback(self, callback: Callable[[DiscoveredDevice], None]) -> None:

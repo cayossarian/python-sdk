@@ -82,27 +82,23 @@ class MqttClient:
             if (tls_ca_cert or tls_ca_data) and not tls_insecure:
                 # Verify server certificate against provided CA cert
                 if tls_ca_data:
-                    logging.info(f'reason=mqttClientTlsSecure,ca_data=provided')
-                    self.mqttc.tls_set(
-                        cadata=tls_ca_data,
-                        cert_reqs=ssl.CERT_REQUIRED,
-                        tls_version=ssl.PROTOCOL_TLS
-                    )
+                    logging.info('reason=mqttClientTlsSecure,ca_data=provided')
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    context.load_verify_locations(cadata=tls_ca_data)
+                    self.mqttc.tls_set_context(context)
                 else:
                     logging.info(f'reason=mqttClientTlsSecure,ca_cert={tls_ca_cert}')
-                    self.mqttc.tls_set(
-                        ca_certs=tls_ca_cert,
-                        cert_reqs=ssl.CERT_REQUIRED,
-                        tls_version=ssl.PROTOCOL_TLS
-                    )
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    context.load_verify_locations(cafile=tls_ca_cert)
+                    self.mqttc.tls_set_context(context)
                 self.mqttc.tls_insecure_set(False)
             else:
                 # Insecure mode - skip certificate verification
-                logging.info(f'reason=mqttClientTlsInsecure')
-                self.mqttc.tls_set(
-                    cert_reqs=ssl.CERT_NONE,
-                    tls_version=ssl.PROTOCOL_TLSv1_2
-                )
+                logging.info('reason=mqttClientTlsInsecure')
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                self.mqttc.tls_set_context(context)
                 self.mqttc.tls_insecure_set(True)
         self.mqttc.connect(endpoint, port, keepalive=60)
 
@@ -180,6 +176,10 @@ class MqttClient:
         self.is_running = False
         self.mqttc.disconnect()
         self.mqttc.loop_stop()
+        # Release subscription callbacks and matcher to free memory
+        self.sub_callbacks.clear()
+        self.sub_matcher = matcher.MQTTMatcher()
+        self.on_connect_callback = None
 
     def publish(self, topic: str, data: str, qos: int = 1, retain: bool = False):
         if not hasattr(self, 'mqttc'):
