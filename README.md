@@ -109,4 +109,4 @@ See [`examples/README.md`](examples/README.md) for example scripts demonstrating
 
 ## License
 
-MIT
+[MIT](LICENSE)
