@@ -540,7 +540,7 @@ class Property:
         """
         Returns a dict containing the Homie 5 $description of the Property
         """
-        logger.info(f"reason=propertyDescriptionEntered,id={self._id}")
+        logger.debug(f"reason=propertyDescriptionEntered,id={self._id}")
         property = dict()
         property["name"] = self._name
         property["datatype"] = self.datatype()
@@ -809,8 +809,7 @@ class Node:
         """
         Returns dict representing the Node's $description attribute
         """
-        logger.info(f"reason=nodeDescriptionEntered,id={self._id}")
-        logger.info(f"reason=nodeDescriptionNode,node={pformat(self.as_dict())}")
+        logger.debug(f"reason=nodeDescriptionEntered,id={self._id}")
         description = dict()
         description["name"] = self._name
         description["type"] = self._type
@@ -1026,7 +1025,7 @@ class Device:
         """
         Returns a dict of the $description attribute of the Device
         """
-        logger.info(f"reason=deviceDescriptionEntered,id={self._id}")
+        logger.debug(f"reason=deviceDescriptionEntered,id={self._id}")
         description = dict()
         description["homie"] = f"{EBUS_HOMIE_VERSION_MAJOR}.{EBUS_HOMIE_VERSION_MINOR}"
         # Version should be changed any time the description document is changed
