@@ -61,7 +61,6 @@ from .mqtt import MqttClient
 from pprint import pformat
 
 logger = logging.getLogger("homie")
-logger.setLevel(logging.INFO)
 
 # eBus MQTT topic constants
 EBUS_HOMIE_DOMAIN = "ebus"
