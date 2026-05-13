@@ -57,9 +57,6 @@ from functools import partial
 from typing import Any, Callable, List, Optional, Type, Union
 from .mqtt import MqttClient
 
-# FIXME debug only?
-from pprint import pformat
-
 logger = logging.getLogger("homie")
 
 # eBus MQTT topic constants
