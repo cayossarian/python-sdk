@@ -324,7 +324,11 @@ class Property:
         """
         # TODO: Decide if we really want this to round()
         round_to = self.round()
-        if round_to:
+        # round(None, X) raises TypeError. Properties can legitimately hold None
+        # (e.g., before initial backing-store sync), and as_dict() / description()
+        # call value() unconditionally for diagnostic logging — so we must return
+        # None unchanged rather than crash.
+        if round_to and self._value is not None:
             rounded_value = round(self._value, round_to)
             logger.debug(f"reason=propertyGetRounding,id={self._id},rounded={rounded_value},value={self._value}")
             return rounded_value
