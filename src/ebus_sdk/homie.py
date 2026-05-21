@@ -55,7 +55,7 @@ from functools import partial
 
 # from deprecated import deprecated
 from typing import Any, Callable, List, Optional, Type, Union
-from .mqtt import MqttClient
+from ebus_mqtt_client import MqttClient
 
 logger = logging.getLogger("homie")
 
@@ -1369,7 +1369,7 @@ def ebus_cfg_add_auth(cfg, username, password):
     """
     Add authentication to the config dictionary
     """
-    from .mqtt import AUTH_TYPE_USER_PASS
+    from ebus_mqtt_client import AUTH_TYPE_USER_PASS
 
     cfg["authentication"] = {
         "type": AUTH_TYPE_USER_PASS,

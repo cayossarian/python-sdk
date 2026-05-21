@@ -40,7 +40,7 @@ from .property import (
 )
 
 # MQTT client
-from .mqtt import MqttClient
+from ebus_mqtt_client import MqttClient
 
 __version__ = "0.1.2"
 
