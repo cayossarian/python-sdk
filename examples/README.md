@@ -20,6 +20,22 @@ Controller that auto-discovers Homie devices and monitors property changes.
 ./simple-controller --config /path/to/broker-cfg.json
 ```
 
+### utility-meter
+
+Publishes a single eBus utility-meter device (`energy.ebus.device.utility-meter`, per the Electrification Bus `data-models/utility-meter.md`) with the standard `info` / `meter` / `status` / `doe` capabilities. Includes a local HTTP endpoint for runtime DOE updates (`POST /doe/import-limit`).
+
+```bash
+./utility-meter --config ./utility-meter-cfg.example.json --broker-config /path/to/broker-cfg.json
+```
+
+Set DOE values at runtime:
+
+```bash
+curl -X POST http://localhost:8765/doe/import-limit \
+  -H 'Content-Type: application/json' \
+  -d '{"watts": 12000, "source": "GRID", "validUntil": "2026-06-07T19:00:00Z"}'
+```
+
 ### simple-span-controller
 
 SPAN Panel controller with mDNS discovery. Connects via MQTTS and monitors power flow properties.

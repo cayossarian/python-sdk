@@ -1,0 +1,39 @@
+{
+  "device-id": "example-meter-001",
+  "device-name": "Example Utility Meter",
+
+  "info": {
+    "vendor-name": "ExampleCorp",
+    "model": "Example-Meter-2S",
+    "serial-number": "example-meter-001",
+    "firmware-version": "0.0.1",
+    "data-model-version": "0.1",
+    "meter-form": "2S",
+    "meter-class": "0.2",
+    "phases": 2,
+    "neutral-connected": true,
+    "nominal-frequency": 60.0,
+    "nominal-phase-angle": 180.0,
+    "nominal-voltage-line-to-line": 240.0,
+    "nominal-voltage-line-to-neutral": 120.0
+  },
+
+  "meter": {
+    "frequency": 60.02,
+    "active-power": 1850.0,
+    "voltage-a": 121.8,
+    "voltage-b": 121.2,
+    "current-a": 7.6,
+    "current-b": 7.6,
+    "imported-energy": 12345678.0,
+    "exported-energy": 0.0
+  },
+
+  "status": {
+    "communication-state": "OK",
+    "time-sync-state": "LOCKED",
+    "tamper-state": "NORMAL"
+  },
+
+  "doe": {}
+}

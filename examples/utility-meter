@@ -1,0 +1,588 @@
+#!/usr/bin/env python3
+"""
+utility-meter — eBus utility-meter publisher reference implementation.
+
+Publishes a single eBus utility-meter device
+(`energy.ebus.device.utility-meter`, per `data-models/utility-meter.md`
+in the Electrification Bus specification) to an MQTT broker, exposing the
+data-model's standard capabilities: `info`, `meter`, `status`, and `doe`.
+
+Intended for developers building an eBus utility-meter publisher who want
+a runnable starting point. Suitable for running on a Raspberry Pi or any
+Linux host as a stand-in for a real utility meter on a test bench.
+
+The DOE values (`doe/power-import-limit`, source, valid-until) are
+controllable at runtime via a small HTTP endpoint:
+
+    POST http://localhost:8765/doe/import-limit
+    Content-Type: application/json
+    { "watts": 12000, "source": "GRID", "validUntil": "2026-06-07T19:00:00Z" }
+
+Meter measurements (`meter/active-power`, etc.) are synthesised from a config
+file — this is a publisher reference, not a metrology device.
+
+Usage:
+    ./utility-meter --config /path/to/meter-cfg.json
+
+See `utility-meter-cfg.example.json` for the config schema.
+"""
+
+# This may be removed in Python 3.10+.
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import threading
+from datetime import datetime, timezone
+from functools import partial
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Callable, Dict, Optional
+
+from ebus_sdk import homie
+from ebus_sdk.property import GroupedPropertyDict, Property
+
+
+# ─── Defaults ─────────────────────────────────────────────────────────────────
+
+DEFAULT_DOE_ENDPOINT_PORT = 8765
+DEFAULT_BROKER_CFG_ENV = "EBUS_BROKER_CFG"
+
+# eBus utility-meter device type per the data model.
+DEVICE_TYPE = "energy.ebus.device.utility-meter"
+
+# Capability node types.
+CAPABILITY_INFO = "energy.ebus.capability.info"
+CAPABILITY_METER = "energy.ebus.capability.meter"
+CAPABILITY_STATUS = "energy.ebus.capability.status"
+CAPABILITY_DOE = "energy.ebus.capability.doe"
+
+
+# ─── Logger boilerplate ───────────────────────────────────────────────────────
+
+
+def _make_logger(name: str, level: int = logging.INFO) -> logging.Logger:
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
+        )
+        logger.addHandler(handler)
+    return logger
+
+
+# ─── Pure model: utility-meter state ──────────────────────────────────────────
+
+
+class UtilityMeter:
+    """
+    Pure-Python model of the utility meter's published state.
+
+    Holds the values for `info`, `meter`, `status`, and `doe` properties.
+    Knows nothing about MQTT — the adapter below translates this state to
+    Homie/eBus topics.
+
+    Values change via `set_doe_*` methods (driven by the HTTP DOE endpoint)
+    and via `tick()` (driven by a periodic thread that simulates meter
+    measurement updates). Subscribers register callbacks via
+    `add_property_on_change_callback`.
+    """
+
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        logger: Optional[logging.Logger] = None,
+    ):
+        self._logger = logger or _make_logger(self.__class__.__name__)
+        self._config = config
+        self._props = GroupedPropertyDict()
+        self._populate_info()
+        self._populate_meter()
+        self._populate_status()
+        self._populate_doe()
+
+    # ── info ──
+
+    def _populate_info(self):
+        """Static nameplate properties from config."""
+        info = self._config.get("info", {})
+        # TODO: validate that the standard `info` properties from the
+        # eBus utility-meter data model are populated (vendor-name, model,
+        # serial-number, meter-form, meter-class, phases, neutral-connected,
+        # nominal-frequency, nominal-phase-angle, nominal-voltage-*).
+        for key, value in info.items():
+            self._props.add_property_from_dict(
+                "info", {"id": key, "type": type(value), "value": value}
+            )
+
+    # ── meter ──
+
+    def _populate_meter(self):
+        """Synthesised instantaneous + cumulative measurements."""
+        # TODO: drive these from a synthetic-load model rather than static
+        # config so the demo is more illustrative. For scaffold purposes,
+        # config-supplied values are sufficient.
+        meter = self._config.get("meter", {})
+        for key, value in meter.items():
+            self._props.add_property_from_dict(
+                "meter", {"id": key, "type": type(value), "value": value}
+            )
+
+    # ── status ──
+
+    def _populate_status(self):
+        defaults = {
+            "communication-state": "OK",
+            "time-sync-state": "LOCKED",
+        }
+        defaults.update(self._config.get("status", {}))
+        for key, value in defaults.items():
+            self._props.add_property_from_dict(
+                "status", {"id": key, "type": type(value), "value": value}
+            )
+
+    # ── doe ──
+
+    def _populate_doe(self):
+        """Initial DOE values. May be empty / absent — DOE is publish-on-change."""
+        doe = self._config.get("doe", {})
+        # Defaults: no initial limit signalled. Setting these via the HTTP
+        # endpoint is the primary way DOE values flow into the meter at
+        # runtime.
+        for key, value in doe.items():
+            self._props.add_property_from_dict(
+                "doe", {"id": key, "type": type(value), "value": value}
+            )
+
+    def set_doe_import_limit(
+        self,
+        watts: Optional[float],
+        source: Optional[str] = None,
+        valid_until: Optional[str] = None,
+    ):
+        """
+        Update the DOE import-limit triplet atomically.
+
+        `watts=None` clears the limit (publishes an absent / empty value
+        per the eBus interface spec). `source` is one of CONTRACT / REGULATOR
+        / EQUIPMENT / GRID / UNKNOWN. `valid_until` is ISO-8601 UTC or None.
+        """
+        self._set_or_clear("doe", "power-import-limit", watts, float)
+        self._set_or_clear("doe", "power-import-limit-source", source, str)
+        self._set_or_clear(
+            "doe", "power-import-limit-valid-until", valid_until, str
+        )
+
+    def _set_or_clear(self, group, prop_id, value, py_type):
+        try:
+            existing = self._props.get(group, prop_id)
+        except KeyError:
+            existing = None
+        if existing is None:
+            if value is not None:
+                self._props.add_property_from_dict(
+                    group, {"id": prop_id, "type": py_type, "value": value}
+                )
+        else:
+            existing.set_value(value)
+
+    # ── tick (periodic synthetic update) ──
+
+    def tick(self):
+        """
+        Called periodically to nudge meter measurements so consumers can see
+        live changes. Scaffold: TODO — implement synthetic load model.
+        """
+        # TODO: synthesise plausible variation on active-power / voltage /
+        # current; advance imported-energy / exported-energy counters.
+        pass
+
+    # ── callback registration ──
+
+    def add_property_on_change_callback(self, group, prop_id, callback):
+        return self._props.add_property_on_change_callback(
+            group, prop_id, callback
+        )
+
+    def get_property(self, group, prop_id) -> Property:
+        return self._props.get(group, prop_id)
+
+    def as_dict(self) -> dict:
+        return self._props.as_dict()
+
+
+# ─── Adapter: model → Homie/eBus topics ───────────────────────────────────────
+
+
+def _set_homie_property_from_property(
+    homie_property: homie.Property, prop: Property
+) -> bool:
+    """Callback used to mirror UtilityMeter property values onto Homie."""
+    return homie_property.set_value(prop.value())
+
+
+# Capability → property-id → {datatype, unit} hint table.
+# Mirrors the standard property vocabulary from the eBus utility-meter
+# data model. The scaffold publishes a representative subset; the actual
+# published set adapts to which UtilityMeter properties are populated
+# from config.
+HOMIE_PROPERTY_HINTS: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "info": {
+        "vendor-name": {"datatype": homie.PropertyDatatype.STRING},
+        "model": {"datatype": homie.PropertyDatatype.STRING},
+        "serial-number": {"datatype": homie.PropertyDatatype.STRING},
+        "firmware-version": {"datatype": homie.PropertyDatatype.STRING},
+        "data-model-version": {"datatype": homie.PropertyDatatype.STRING},
+        "meter-form": {"datatype": homie.PropertyDatatype.STRING},
+        "meter-class": {"datatype": homie.PropertyDatatype.STRING},
+        "phases": {"datatype": homie.PropertyDatatype.INTEGER},
+        "neutral-connected": {"datatype": homie.PropertyDatatype.BOOLEAN},
+        "nominal-frequency": {
+            "datatype": homie.PropertyDatatype.FLOAT,
+            "unit": homie.Unit.HERTZ,
+        },
+        # TODO add the remaining `info` properties from the eBus
+        # utility-meter data model as the scaffold matures.
+    },
+    "meter": {
+        "active-power": {
+            "datatype": homie.PropertyDatatype.FLOAT,
+            "unit": homie.Unit.WATT,
+        },
+        "frequency": {
+            "datatype": homie.PropertyDatatype.FLOAT,
+            "unit": homie.Unit.HERTZ,
+        },
+        "imported-energy": {
+            "datatype": homie.PropertyDatatype.FLOAT,
+            "unit": homie.Unit.WATT_HOUR,
+        },
+        "exported-energy": {
+            "datatype": homie.PropertyDatatype.FLOAT,
+            "unit": homie.Unit.WATT_HOUR,
+        },
+        "voltage-a": {
+            "datatype": homie.PropertyDatatype.FLOAT,
+            "unit": homie.Unit.VOLT,
+        },
+        "current-a": {
+            "datatype": homie.PropertyDatatype.FLOAT,
+            "unit": homie.Unit.AMPERE,
+        },
+        # TODO add voltage-b / current-b / etc. as the synthetic model grows.
+    },
+    "status": {
+        "communication-state": {"datatype": homie.PropertyDatatype.ENUM},
+        "time-sync-state": {"datatype": homie.PropertyDatatype.ENUM},
+        "tamper-state": {"datatype": homie.PropertyDatatype.ENUM},
+    },
+    "doe": {
+        "power-import-limit": {
+            "datatype": homie.PropertyDatatype.FLOAT,
+            "unit": homie.Unit.WATT,
+        },
+        "power-import-limit-source": {
+            "datatype": homie.PropertyDatatype.ENUM,
+        },
+        "power-import-limit-valid-until": {
+            "datatype": homie.PropertyDatatype.DATETIME,
+        },
+    },
+}
+
+
+class UtilityMeterAdapter:
+    """
+    Translates a UtilityMeter to a Homie 5 device on the eBus broker.
+
+    Creates one root device of type `energy.ebus.device.utility-meter` with
+    four capability nodes (`info`, `meter`, `status`, `doe`). Each Homie
+    property is mirrored from the corresponding UtilityMeter property via a
+    callback.
+    """
+
+    def __init__(
+        self,
+        meter: UtilityMeter,
+        device_id: str,
+        device_name: str,
+        mqtt_cfg: Dict[str, Any],
+        logger: Optional[logging.Logger] = None,
+    ):
+        self._logger = logger or _make_logger(self.__class__.__name__)
+        self._meter = meter
+        self._device_id = device_id
+        self._device_name = device_name
+        self._mqtt_cfg = mqtt_cfg
+        self._homie_device: Optional[homie.Device] = None
+        self._create_device_and_nodes()
+
+    @staticmethod
+    def load_broker_config(config_file: str) -> Dict[str, Any]:
+        with open(config_file, "r") as fp:
+            return json.load(fp)
+
+    # ── homie device + nodes ──
+
+    def _create_homie_device(self) -> homie.Device:
+        device = homie.Device(
+            self._device_id,
+            name=self._device_name,
+            type=DEVICE_TYPE,
+            mqtt_cfg=self._mqtt_cfg,
+        )
+        device.start_mqtt_client()
+        return device
+
+    def _add_capability_node(
+        self,
+        node_id: str,
+        node_type: str,
+        node_name: str,
+        meter_group: str,
+    ) -> homie.Node:
+        node = self._homie_device.add_node_from_dict(
+            {"id": node_id, "name": node_name, "type": node_type}
+        )
+        hints = HOMIE_PROPERTY_HINTS.get(meter_group, {})
+        for prop_id, prop in self._meter._props.get_group(meter_group).items():
+            hint = hints.get(prop_id, {})
+            property_dict = {
+                "id": prop_id,
+                "value": prop.value(),
+            }
+            if "datatype" in hint:
+                property_dict["datatype"] = hint["datatype"]
+            else:
+                inferred = homie.datatype_from_type(prop.type())
+                if inferred:
+                    property_dict["datatype"] = inferred
+            if "unit" in hint:
+                property_dict["unit"] = hint["unit"]
+            homie_property = node.add_property_from_dict(property_dict)
+            self._meter.add_property_on_change_callback(
+                meter_group,
+                prop_id,
+                partial(_set_homie_property_from_property, homie_property),
+            )
+        return node
+
+    def _create_device_and_nodes(self):
+        self._homie_device = self._create_homie_device()
+        self._add_capability_node(
+            "info", CAPABILITY_INFO, "Meter identity", "info"
+        )
+        self._add_capability_node(
+            "meter",
+            CAPABILITY_METER,
+            "Electrical measurements",
+            "meter",
+        )
+        self._add_capability_node(
+            "status", CAPABILITY_STATUS, "Meter operational state", "status"
+        )
+        self._add_capability_node(
+            "doe",
+            CAPABILITY_DOE,
+            "Utility-signalled operating envelope",
+            "doe",
+        )
+
+
+# ─── DOE HTTP endpoint ────────────────────────────────────────────────────────
+
+
+class _DoeRequestHandler(BaseHTTPRequestHandler):
+    """Tiny HTTP handler accepting DOE updates as JSON."""
+
+    meter: UtilityMeter = None  # type: ignore[assignment]
+
+    def log_message(self, format, *args):
+        logging.getLogger("DoeEndpoint").info(
+            "%s - - [%s] %s",
+            self.address_string(),
+            self.log_date_time_string(),
+            format % args,
+        )
+
+    def do_POST(self):
+        if self.path != "/doe/import-limit":
+            self._reply(HTTPStatus.NOT_FOUND, {"error": "unknown path"})
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception as exc:
+            self._reply(HTTPStatus.BAD_REQUEST, {"error": f"invalid json: {exc}"})
+            return
+        watts = body.get("watts")
+        source = body.get("source")
+        valid_until = body.get("validUntil")
+        # TODO: validate `source` is one of the enum values defined by
+        # the eBus utility-meter data model's `doe/power-import-limit-source`;
+        # validate `validUntil` parses as ISO-8601 UTC; validate `watts` is
+        # a non-negative number (or null to clear).
+        try:
+            self.meter.set_doe_import_limit(watts, source, valid_until)
+        except Exception as exc:
+            self._reply(
+                HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)}
+            )
+            return
+        self._reply(
+            HTTPStatus.OK,
+            {
+                "applied": {
+                    "watts": watts,
+                    "source": source,
+                    "validUntil": valid_until,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+
+    def _reply(self, status: HTTPStatus, payload: dict):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def start_doe_endpoint(meter: UtilityMeter, port: int) -> ThreadingHTTPServer:
+    handler = type(
+        "BoundDoeRequestHandler", (_DoeRequestHandler,), {"meter": meter}
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logging.getLogger("DoeEndpoint").info(
+        "reason=doeEndpointReady,port=%d,path=/doe/import-limit", port
+    )
+    return server
+
+
+# ─── Periodic tick ────────────────────────────────────────────────────────────
+
+
+def start_tick_thread(meter: UtilityMeter, interval_s: float) -> threading.Event:
+    stop = threading.Event()
+
+    def _run():
+        while not stop.is_set():
+            try:
+                meter.tick()
+            except Exception:
+                logging.exception("reason=tickException")
+            stop.wait(interval_s)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return stop
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "eBus utility-meter publisher reference implementation."
+        )
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        required=True,
+        help="Path to the meter config JSON file (see "
+        "utility-meter-cfg.example.json).",
+    )
+    parser.add_argument(
+        "-b",
+        "--broker-config",
+        help="Path to the MQTT broker config JSON file. "
+        f"Defaults to ${DEFAULT_BROKER_CFG_ENV} env var.",
+    )
+    parser.add_argument(
+        "--doe-port",
+        type=int,
+        default=DEFAULT_DOE_ENDPOINT_PORT,
+        help="Port for the local DOE HTTP endpoint "
+        f"(default: {DEFAULT_DOE_ENDPOINT_PORT}).",
+    )
+    parser.add_argument(
+        "--tick-interval",
+        type=float,
+        default=5.0,
+        help="Synthetic-update interval seconds (default: 5.0).",
+    )
+    args = parser.parse_args()
+
+    # Logging
+    logging.basicConfig()
+    log = _make_logger("utility-meter")
+
+    # Meter config
+    with open(args.config, "r") as fp:
+        meter_cfg = json.load(fp)
+
+    # Broker config
+    broker_cfg_path = args.broker_config or os.environ.get(
+        DEFAULT_BROKER_CFG_ENV
+    )
+    if not broker_cfg_path:
+        log.error(
+            "no broker config; pass --broker-config or set %s",
+            DEFAULT_BROKER_CFG_ENV,
+        )
+        sys.exit(2)
+    mqtt_cfg = UtilityMeterAdapter.load_broker_config(broker_cfg_path)
+
+    # Resolve device identity from config
+    device_id = meter_cfg.get("device-id") or meter_cfg.get("info", {}).get(
+        "serial-number"
+    )
+    device_name = meter_cfg.get("device-name", "Utility Meter")
+    if not device_id:
+        log.error(
+            "no device-id (and no info.serial-number) in meter config"
+        )
+        sys.exit(2)
+
+    # Wire it up
+    meter = UtilityMeter(meter_cfg, logger=_make_logger("UtilityMeter"))
+    adapter = UtilityMeterAdapter(
+        meter,
+        device_id=device_id,
+        device_name=device_name,
+        mqtt_cfg=mqtt_cfg,
+        logger=_make_logger("UtilityMeterAdapter"),
+    )
+    start_doe_endpoint(meter, args.doe_port)
+    start_tick_thread(meter, args.tick_interval)
+
+    log.info(
+        "reason=utilityMeterReady,deviceId=%s,deviceType=%s",
+        device_id,
+        DEVICE_TYPE,
+    )
+
+    # Wait forever for an event that will never come
+    threading.Event().wait()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        logging.exception(e)
+        sys.exit(1)
