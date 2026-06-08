@@ -110,6 +110,10 @@ See [`examples/README.md`](examples/README.md) for example scripts demonstrating
 - Python 3.10+
 - paho-mqtt >= 1.6.1
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to file Discussions, Issues, and pull requests. Pure MQTT-transport changes (TLS, auth, paho upgrades) belong in [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client), not here. Normative behavior tracks the [Electrification Bus specification](https://github.com/electrification-bus/specification).
+
 ## License
 
 [MIT License](LICENSE) — Copyright (c) 2026 Clark Communications Corporation
