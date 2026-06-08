@@ -43,7 +43,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, Optional
 
 from ebus_sdk import homie
-from ebus_sdk.property import GroupedPropertyDict, Property
+from ebus_sdk.property import ChangeEvent, GroupedPropertyDict, Property
 
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -163,7 +163,7 @@ class UtilityMeter:
 
     def set_doe_import_limit(
         self,
-        watts: Optional[float],
+        watts: Optional[int],
         source: Optional[str] = None,
         valid_until: Optional[str] = None,
     ):
@@ -171,10 +171,14 @@ class UtilityMeter:
         Update the DOE import-limit triplet atomically.
 
         `watts=None` clears the limit (publishes an absent / empty value
-        per the eBus interface spec). `source` is one of CONTRACT / REGULATOR
-        / EQUIPMENT / GRID / UNKNOWN. `valid_until` is ISO-8601 UTC or None.
+        per the eBus interface spec). Non-None watts are coerced to int —
+        the eBus utility-meter data model defines `power-import-limit` as
+        integer Watts (non-negative; whole watts). `source` is one of
+        CONTRACT / REGULATOR / EQUIPMENT / GRID / UNKNOWN. `valid_until`
+        is ISO-8601 UTC or None.
         """
-        self._set_or_clear("doe", "power-import-limit", watts, float)
+        watts = int(watts) if watts is not None else None
+        self._set_or_clear("doe", "power-import-limit", watts, int)
         self._set_or_clear("doe", "power-import-limit-source", source, str)
         self._set_or_clear(
             "doe", "power-import-limit-valid-until", valid_until, str
@@ -270,7 +274,7 @@ HOMIE_PROPERTY_HINTS: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
         "voltage-a": {
             "datatype": homie.PropertyDatatype.FLOAT,
-            "unit": homie.Unit.VOLT,
+            "unit": homie.Unit.VOLTS,
         },
         "current-a": {
             "datatype": homie.PropertyDatatype.FLOAT,
@@ -285,7 +289,7 @@ HOMIE_PROPERTY_HINTS: Dict[str, Dict[str, Dict[str, Any]]] = {
     },
     "doe": {
         "power-import-limit": {
-            "datatype": homie.PropertyDatatype.FLOAT,
+            "datatype": homie.PropertyDatatype.INTEGER,
             "unit": homie.Unit.WATT,
         },
         "power-import-limit-source": {
@@ -351,31 +355,79 @@ class UtilityMeterAdapter:
         node = self._homie_device.add_node_from_dict(
             {"id": node_id, "name": node_name, "type": node_type}
         )
-        hints = HOMIE_PROPERTY_HINTS.get(meter_group, {})
-        for prop_id, prop in self._meter._props.get_group(meter_group).items():
-            hint = hints.get(prop_id, {})
-            property_dict = {
-                "id": prop_id,
-                "value": prop.value(),
-            }
-            if "datatype" in hint:
-                property_dict["datatype"] = hint["datatype"]
-            else:
-                inferred = homie.datatype_from_type(prop.type())
-                if inferred:
-                    property_dict["datatype"] = inferred
-            if "unit" in hint:
-                property_dict["unit"] = hint["unit"]
-            homie_property = node.add_property_from_dict(property_dict)
-            self._meter.add_property_on_change_callback(
-                meter_group,
-                prop_id,
-                partial(_set_homie_property_from_property, homie_property),
-            )
+        self._homie_nodes[meter_group] = node
+        if not self._meter._props.has_group(meter_group):
+            # Empty capability node — properties may be added at runtime
+            # (e.g. doe values arriving via the HTTP endpoint). The
+            # PROPERTY_ADDED observer registered below will mirror them
+            # to Homie when they arrive.
+            return node
+        for prop_id, prop in self._meter._props.items(meter_group):
+            self._add_homie_property(node, meter_group, prop_id, prop)
         return node
+
+    def _add_homie_property(
+        self,
+        node: homie.Node,
+        meter_group: str,
+        prop_id: str,
+        prop: Property,
+    ):
+        """
+        Add a single Homie property to `node`, mirroring the meter
+        Property `prop`, and wire a change callback so subsequent
+        set_value() calls on the meter property republish to Homie.
+        Used both at startup (for properties seeded from config) and at
+        runtime (for properties added by the PROPERTY_ADDED observer).
+        """
+        if prop_id in self._homie_property_ids.get(meter_group, set()):
+            return  # already mirrored
+        hint = HOMIE_PROPERTY_HINTS.get(meter_group, {}).get(prop_id, {})
+        property_dict = {"id": prop_id, "value": prop.value()}
+        if "datatype" in hint:
+            property_dict["datatype"] = hint["datatype"]
+        else:
+            inferred = homie.datatype_from_type(prop.type())
+            if inferred:
+                property_dict["datatype"] = inferred
+        if "unit" in hint:
+            property_dict["unit"] = hint["unit"]
+        homie_property = node.add_property_from_dict(property_dict)
+        self._meter.add_property_on_change_callback(
+            meter_group,
+            prop_id,
+            partial(_set_homie_property_from_property, homie_property),
+        )
+        self._homie_property_ids.setdefault(meter_group, set()).add(prop_id)
+
+    def _on_meter_property_event(
+        self,
+        event_type: ChangeEvent,
+        group_name: str = None,
+        property_id: str = None,
+        property: Property = None,
+        **kwargs,
+    ):
+        """
+        Observer callback for the meter's GroupedPropertyDict. Mirrors
+        runtime-added properties (e.g. doe values arriving via HTTP after
+        startup) to Homie.
+        """
+        if event_type != ChangeEvent.PROPERTY_ADDED:
+            return
+        node = self._homie_nodes.get(group_name)
+        if node is None:
+            self._logger.warning(
+                "reason=runtimePropertyAddUnknownGroup,group=%s,propertyId=%s",
+                group_name, property_id,
+            )
+            return
+        self._add_homie_property(node, group_name, property_id, property)
 
     def _create_device_and_nodes(self):
         self._homie_device = self._create_homie_device()
+        self._homie_nodes: Dict[str, homie.Node] = {}
+        self._homie_property_ids: Dict[str, set] = {}
         self._add_capability_node(
             "info", CAPABILITY_INFO, "Meter identity", "info"
         )
@@ -393,6 +445,13 @@ class UtilityMeterAdapter:
             CAPABILITY_DOE,
             "Utility-signalled operating envelope",
             "doe",
+        )
+        # Observe runtime property additions so values arriving after
+        # device startup (typical for doe via the HTTP endpoint) are
+        # mirrored onto Homie.
+        self._meter._props.add_observer(
+            self._on_meter_property_event,
+            event_types=[ChangeEvent.PROPERTY_ADDED],
         )
 
 
@@ -428,7 +487,7 @@ class _DoeRequestHandler(BaseHTTPRequestHandler):
         # TODO: validate `source` is one of the enum values defined by
         # the eBus utility-meter data model's `doe/power-import-limit-source`;
         # validate `validUntil` parses as ISO-8601 UTC; validate `watts` is
-        # a non-negative number (or null to clear).
+        # a non-negative integer (or null to clear).
         try:
             self.meter.set_doe_import_limit(watts, source, valid_until)
         except Exception as exc:
