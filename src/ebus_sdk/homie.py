@@ -866,7 +866,18 @@ class Device:
     """
     Object representing a Homie MQTT Device
     https://homieiot.github.io/specification/
-    TODO: Child devices might (or must?) use the root's MQTT client
+
+    A Device is either a *root* (owns the MQTT connection and LWT) or a *child*
+    (borrows its root's connection). The distinction is set at construction:
+
+        # Root device
+        panel = Device(id="panel-1", type="...", mqtt_cfg={...})
+
+        # Child device (any depth — children may themselves have children)
+        circuit = Device(id="circuit-1", type="...", parent=panel)
+
+    Children share the root's single MQTT connection. Only the root registers
+    a Last Will so the entire tree is marked lost on adapter death.
 
     mqtt_cfg is a dict, two examples:
 
@@ -889,39 +900,42 @@ class Device:
         id: str,
         name: Optional[str] = None,
         type: Optional[str] = None,
-        children_ids: Optional[List] = [],
-        root_id: Optional[str] = None,
-        parent_id: Optional[str] = None,
+        parent: Optional["Device"] = None,
         nodes: Optional[List] = [],
         extensions: Optional[List] = [],
-        mqtt_cfg: Optional[dict] = {},
+        mqtt_cfg: Optional[dict] = None,
         qos: int = EBUS_HOMIE_MQTT_QOS,
     ):
+        # Root vs. child invariants — mutually exclusive
+        if parent is not None and mqtt_cfg:
+            raise ValueError(
+                f"Device id={id}: cannot pass both parent= and mqtt_cfg=; "
+                "children share the root's MQTT connection"
+            )
+        if parent is not None and parent.root().mqttc is None:
+            raise RuntimeError(
+                f"Device id={id}: parent's tree (root id={parent.root().id()}) has no MQTT client; "
+                "construct and start the root before attaching children"
+            )
+
         # Basic initialization
         self.mqttc = None
         self._state = None
         self._qos = qos
-        # Store the arguments
         self._id = id
-        if name:
-            self._name = name
-        else:
-            self._name = id
+        self._name = name if name else id
         self._type = type
-        self._children_ids = children_ids
-        self._mqtt_cfg = mqtt_cfg
-        # If the device is NOT the root device, both root_id and parent_id are required
-        if (root_id and not parent_id) or (not root_id and parent_id):
-            logger.exception(f"reason=deviceInitRootParentException,id={id},rootID={root_id},parentID={parent_id}")
-        self._root_id = root_id
-        self._parent_id = parent_id
-        # Initialize nodes here, but note that we'll add any provided nodes below
+        self._parent: Optional[Device] = parent
+        self._children: List[Device] = []
+        self._mqtt_cfg = mqtt_cfg if parent is None else None
         self._nodes = {}
         self._extensions = extensions
-        # Set the interesting/dynamic stuff
         # Distinguish between initial and subsequent connections to broker
         self.initial_broker_connection = True
-        self.connect_broker()
+        if parent is None:
+            self.connect_broker()
+        else:
+            parent._children.append(self)
         with self.state_transition():
             for node in nodes:
                 self.add_node(node)
@@ -940,6 +954,13 @@ class Device:
             "extensions": self.extensions(),
             "nodes": nodes,
         }
+
+    def root(self) -> "Device":
+        """
+        Return the root Device of this tree. For a root device, returns self.
+        For a child or grandchild, walks self._parent up to the top.
+        """
+        return self if self._parent is None else self._parent.root()
 
     @staticmethod
     def now_ems() -> int:
@@ -972,23 +993,35 @@ class Device:
         """
         return self._state
 
-    def root_id(self) -> str:
+    def root_id(self) -> Optional[str]:
         """
-        Returns root_id of Device
+        Returns root_id of Device, or None if self is the root.
         """
-        return self._root_id
+        return None if self._parent is None else self.root().id()
 
-    def parent_id(self) -> str:
+    def parent_id(self) -> Optional[str]:
         """
-        Returns parent_id of Device
+        Returns parent_id of Device, or None if self is the root.
         """
-        return self._parent_id
+        return None if self._parent is None else self._parent.id()
 
-    def children_ids(self) -> List:
+    def parent(self) -> Optional["Device"]:
         """
-        Returns list of Device's children_ids
+        Returns the parent Device, or None if self is the root.
         """
-        return self._children_ids
+        return self._parent
+
+    def children(self) -> List["Device"]:
+        """
+        Returns list of child Device references (live objects, not IDs).
+        """
+        return list(self._children)
+
+    def children_ids(self) -> List[str]:
+        """
+        Returns list of Device's children's IDs (computed from live refs).
+        """
+        return [child.id() for child in self._children]
 
     def extensions(self) -> List:
         """
@@ -1008,14 +1041,26 @@ class Device:
         return self._nodes
 
     def get_mqtt_client(self) -> MqttClient:
-        mqttc = self.mqttc
+        """
+        Return the MQTT client for this device's tree.
+        For root devices, returns self.mqttc. For children, ascends to root.
+        """
+        mqttc = self.root().mqttc
         if not mqttc:
             logger.warning(f"reason=deviceGetMqttClientNoMqttClient,id={self._id}")
         return mqttc
 
     def start_mqtt_client(self) -> None:
-        if not self.mqttc.is_running:
-            self.mqttc.start()
+        """
+        Start the root device's MQTT client loop. Children share the root's
+        connection — calling start_mqtt_client() on a child starts the root's.
+        """
+        root = self.root()
+        if root.mqttc is None:
+            logger.warning(f"reason=deviceStartMqttClientNoMqttClient,id={self._id}")
+            return
+        if not root.mqttc.is_running:
+            root.mqttc.start()
 
     def description(self) -> dict:
         """
@@ -1033,15 +1078,12 @@ class Device:
         for node_id, node in nodes_snapshot.items():
             nodes_descriptions[node_id] = node.description()
         description["nodes"] = nodes_descriptions
-        description["children"] = self._children_ids
-        if self._root_id:
-            # ID of the root parent device.
+        description["children"] = self.children_ids()
+        if self._parent is not None:
             # Required if the device is NOT the root device, MUST be omitted otherwise.
-            description["root"] = self._root_id
-        if self._parent_id:
-            # ID of the parent device.
+            description["root"] = self.root().id()
             # Required if the parent is NOT the root device. Defaults to the value of the root property.
-            description["parent"] = self._parent_id
+            description["parent"] = self._parent.id()
         description["extensions"] = self._extensions
         return description
 
@@ -1054,45 +1096,6 @@ class Device:
         if state != self._state:
             self._state = state
             self.publish_state()
-            return True
-        else:
-            return False
-
-    def add_child(self, child_id: str) -> bool:
-        """
-        Append child_id to children_ids
-        Returns True if added, else False
-        """
-        if child_id in self._children_ids:
-            return False
-        else:
-            self._children_ids.append(child_id)
-            return True
-
-    def remove_child(self, child_id: str) -> bool:
-        """
-        Remove child_id from children_ids, if it included
-        Returns True if removed, else False
-        """
-        if child_id in self._children_ids:
-            self._children_ids.remove(child_id)
-            return True
-        else:
-            return False
-
-    def set_parent(self, parent_id: str) -> None:
-        """
-        Sets parent_id
-        """
-        self._parent_id = parent_id
-
-    def unset_parent(self) -> bool:
-        """
-        Unset parent_id if set
-        Returns True if unset, else False
-        """
-        if self._parent_id:
-            self._parent_id = None
             return True
         else:
             return False
@@ -1167,7 +1170,8 @@ class Device:
         """
         logger.info(f"reason=deviceDeleteAllFromMqtt,deviceId={self._id}")
 
-        if not self.mqttc:
+        mqttc = self.get_mqtt_client()
+        if not mqttc:
             logger.warning(f"reason=deviceDeleteAllFromMqttNoMqttClient,deviceId={self._id}")
             return
 
@@ -1187,7 +1191,7 @@ class Device:
                     if was_published:
                         prop_topic = f"{base_topic}/{node_id}/{prop_id}"
                         try:
-                            self.mqttc.publish(prop_topic, "", retain=True, qos=self._qos)
+                            mqttc.publish(prop_topic, "", retain=True, qos=self._qos)
                             logger.debug("reason=deviceClearedProperty...")
                         except Exception:
                             logger.warning("reason=deviceClearPropertyFailed...")
@@ -1195,7 +1199,7 @@ class Device:
         # Step 2: Clear the main device $description (this removes all nodes from schema)
         description_topic = f"{base_topic}/$description"
         try:
-            self.mqttc.publish(description_topic, "", retain=True, qos=self._qos)
+            mqttc.publish(description_topic, "", retain=True, qos=self._qos)
             logger.info(f"reason=deviceClearedDescription,deviceId={self._id},topic={description_topic}")
         except Exception as e:
             logger.warning(f"reason=deviceClearDescriptionFailed,deviceId={self._id},error={e}")
@@ -1210,11 +1214,12 @@ class Device:
         Publish empty string to clear retained message on topic
         Returns True on success, False on failure
         """
-        if not self.mqttc:
+        mqttc = self.get_mqtt_client()
+        if not mqttc:
             logger.warning(f"reason=deviceClearTopicNoMqttClient,topic={topic_path}")
             return False
         try:
-            self.mqttc.publish(topic_path, "", retain=True, qos=self._qos)
+            mqttc.publish(topic_path, "", retain=True, qos=self._qos)
             logger.info(f"reason=deviceClearedTopic,topic={topic_path}")
             return True
         except Exception as e:
@@ -1254,9 +1259,14 @@ class Device:
     def publish(self, attribute: str = "", value: Optional[Any] = None) -> None:
         """
         Publishes the value argument to the device's attribute MQTT topic,
-        or if the value is not provided, publishes the current (self) attribute value
+        or if the value is not provided, publishes the current (self) attribute value.
+
+        For child devices, the publish is routed through the root's MQTT client
+        but uses self._id (this device's ID) in the topic — so each device in
+        the tree publishes its own ebus/5/<id>/... topics.
         """
-        if not self.mqttc:
+        mqttc = self.get_mqtt_client()
+        if not mqttc:
             logger.info(f"reason=devicePublishNoMqttClient,attribute={attribute}")
             return
         if not self._id:
@@ -1288,7 +1298,7 @@ class Device:
                     logger.info(f"reason=devicePublishAlertNoValue,id={self._id}")
                     return
             if payload:
-                self.mqttc.publish(topic, payload, retain=True, qos=self._qos)
+                mqttc.publish(topic, payload, retain=True, qos=self._qos)
         except Exception as e:
             logger.exception(f"reason=devicePublishException,id={self._id},attribute={attribute},value={value},e={e}")
 
@@ -1345,8 +1355,12 @@ class Device:
     def connect_broker(self) -> None:
         """
         Connect to MQTT broker using configuration from mqtt_cfg.
-        TODO: If device is a child, likely this needs to happen on the device's root!
+        Only called on root devices — children share the root's connection
+        and skip this entirely (no own MqttClient, no per-child LWT).
         """
+        if self._parent is not None:
+            # Children share the root's MQTT connection.
+            return
         if self.mqttc:
             # If we already have a mqtt client, don't reconnect...
             return

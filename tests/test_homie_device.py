@@ -786,43 +786,62 @@ class TestDeviceNodes:
         assert prop._qos == 1
 
 
-class TestDeviceChildren:
-    def test_add_child(self, mock_paho):
+class TestDeviceTree:
+    def test_root_alone(self, mock_paho):
         device, _ = _make_device(mock_paho)
-        assert device.add_child("child-1") is True
-        assert "child-1" in device.children_ids()
-
-    def test_add_child_duplicate(self, mock_paho):
-        device, _ = _make_device(mock_paho)
-        device.add_child("child-1")
-        assert device.add_child("child-1") is False
-
-    def test_remove_child(self, mock_paho):
-        device, _ = _make_device(mock_paho)
-        device.add_child("child-1")
-        assert device.remove_child("child-1") is True
-        assert "child-1" not in device.children_ids()
-
-    def test_remove_child_missing(self, mock_paho):
-        device, _ = _make_device(mock_paho)
-        assert device.remove_child("missing") is False
-
-
-class TestDeviceParent:
-    def test_set_parent(self, mock_paho):
-        device, _ = _make_device(mock_paho)
-        device.set_parent("root-1")
-        assert device.parent_id() == "root-1"
-
-    def test_unset_parent(self, mock_paho):
-        device, _ = _make_device(mock_paho)
-        device.set_parent("root-1")
-        assert device.unset_parent() is True
+        assert device.parent() is None
         assert device.parent_id() is None
+        assert device.root_id() is None
+        assert device.root() is device
+        assert device.children() == []
+        assert device.children_ids() == []
 
-    def test_unset_parent_already_none(self, mock_paho):
-        device, _ = _make_device(mock_paho)
-        assert device.unset_parent() is False
+    def test_child_registered_with_parent(self, mock_paho):
+        root, _ = _make_device(mock_paho, device_id="root-1")
+        child = Device(id="child-1", parent=root)
+        assert child.parent() is root
+        assert child.parent_id() == "root-1"
+        assert child.root() is root
+        assert child.root_id() == "root-1"
+        assert root.children() == [child]
+        assert root.children_ids() == ["child-1"]
+
+    def test_grandchild_walks_to_root(self, mock_paho):
+        """S2: panel root -> child -> grandchild; root() ascends two levels."""
+        root, _ = _make_device(mock_paho, device_id="panel-1")
+        child = Device(id="bess-1", parent=root)
+        grandchild = Device(id="mid-1", parent=child)
+        assert grandchild.parent() is child
+        assert grandchild.parent_id() == "bess-1"
+        assert grandchild.root() is root
+        assert grandchild.root_id() == "panel-1"
+
+    def test_child_shares_root_mqtt_client(self, mock_paho):
+        root, mock_client = _make_device(mock_paho, device_id="root-1")
+        child = Device(id="child-1", parent=root)
+        assert child.mqttc is None
+        assert child.get_mqtt_client() is mock_client
+        assert child.get_mqtt_client() is root.get_mqtt_client()
+
+    def test_child_with_mqtt_cfg_raises(self, mock_paho):
+        root, _ = _make_device(mock_paho, device_id="root-1")
+        with pytest.raises(ValueError, match="cannot pass both parent= and mqtt_cfg="):
+            Device(id="child-1", parent=root, mqtt_cfg={"host": "x", "port": 1})
+
+    def test_child_with_unconnected_parent_raises(self, mock_paho):
+        """A child cannot attach to a tree whose root has no MqttClient yet."""
+        root, _ = _make_device(mock_paho, device_id="root-1")
+        root.mqttc = None  # simulate failed connect_broker()
+        with pytest.raises(RuntimeError, match="has no MQTT client"):
+            Device(id="child-1", parent=root)
+
+    def test_grandchild_via_unconnected_root_raises(self, mock_paho):
+        """The reachability check must walk to the root, not stop at the immediate parent."""
+        root, _ = _make_device(mock_paho, device_id="root-1")
+        child = Device(id="child-1", parent=root)
+        root.mqttc = None  # break the root after child was attached
+        with pytest.raises(RuntimeError, match="has no MQTT client"):
+            Device(id="grandchild-1", parent=child)
 
 
 class TestDeviceDescription:
@@ -838,18 +857,27 @@ class TestDeviceDescription:
         assert desc["extensions"] == []
 
     def test_description_with_root_and_parent(self, mock_paho):
-        with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
-            mock_client = _mock_mqtt_client()
-            mock_from_config.return_value = mock_client
-            device = Device(
-                id="child-1",
-                mqtt_cfg={"host": "localhost", "port": 1883},
-                root_id="root-1",
-                parent_id="root-1",
-            )
-            desc = device.description()
-            assert desc["root"] == "root-1"
-            assert desc["parent"] == "root-1"
+        root, _ = _make_device(mock_paho, device_id="root-1")
+        child = Device(id="child-1", parent=root)
+        desc = child.description()
+        assert desc["root"] == "root-1"
+        assert desc["parent"] == "root-1"
+
+    def test_description_grandchild_root_vs_parent(self, mock_paho):
+        """S2: grandchild's $description.root walks to the top, parent is direct."""
+        root, _ = _make_device(mock_paho, device_id="panel-1")
+        child = Device(id="bess-1", parent=root)
+        grandchild = Device(id="mid-1", parent=child)
+        desc = grandchild.description()
+        assert desc["root"] == "panel-1"
+        assert desc["parent"] == "bess-1"
+
+    def test_description_parent_lists_child(self, mock_paho):
+        root, _ = _make_device(mock_paho, device_id="root-1")
+        Device(id="child-a", parent=root)
+        Device(id="child-b", parent=root)
+        desc = root.description()
+        assert desc["children"] == ["child-a", "child-b"]
 
     def test_description_omits_root_parent_for_root_device(self, mock_paho):
         device, _ = _make_device(mock_paho)
