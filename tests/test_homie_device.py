@@ -725,6 +725,139 @@ class TestDeviceStateTransition:
         assert device.state() == DeviceState.READY
 
 
+def _state_payloads_for(mock_client, device_id):
+    """Return the sequence of $state payloads published for the given device id."""
+    topic_prefix = f"/{device_id}/$state"
+    return [
+        c[0][1]
+        for c in mock_client.publish.call_args_list
+        if topic_prefix in c[0][0]
+    ]
+
+
+def _description_publishes_for(mock_client, device_id):
+    """Return count of $description publishes for the given device id."""
+    topic_prefix = f"/{device_id}/$description"
+    return sum(
+        1 for c in mock_client.publish.call_args_list if topic_prefix in c[0][0]
+    )
+
+
+class TestChildLifecycleProtocol:
+    """SDK-4cq: Homie add-child / remove-child 6-step protocol."""
+
+    def test_single_add_runs_full_protocol(self, mock_paho):
+        """Adding a child to a READY parent: child INIT→READY, then parent INIT→READY."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        assert panel.state() == DeviceState.READY
+        mock_client.publish.reset_mock()
+
+        Device(id="circuit-1", parent=panel)
+
+        # Child completed its own INIT→READY
+        circuit_states = _state_payloads_for(mock_client, "circuit-1")
+        assert DeviceState.INIT in circuit_states
+        assert DeviceState.READY in circuit_states
+        # Parent flapped INIT→READY around the change (steps 4-6)
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        assert panel_states[-2:] == [DeviceState.INIT, DeviceState.READY]
+        # And parent's description was republished including the new child
+        assert _description_publishes_for(mock_client, "panel-1") >= 1
+        # Order: child READY must come BEFORE parent's final INIT→READY (steps 1-3 < 4-6)
+        last_circuit_ready = max(
+            i for i, c in enumerate(mock_client.publish.call_args_list)
+            if "/circuit-1/$state" in c[0][0] and c[0][1] == DeviceState.READY
+        )
+        first_panel_init_after = next(
+            i for i, c in enumerate(mock_client.publish.call_args_list)
+            if "/panel-1/$state" in c[0][0] and c[0][1] == DeviceState.INIT and i > last_circuit_ready
+        )
+        assert last_circuit_ready < first_panel_init_after
+
+    def test_batched_adds_produce_one_parent_flap(self, mock_paho):
+        """S1: 32 children added inside one state_transition → exactly one parent INIT→READY."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        mock_client.publish.reset_mock()
+
+        with panel.state_transition():
+            for i in range(32):
+                Device(id=f"circuit-{i}", parent=panel)
+
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        # One INIT at transition entry, one READY at exit — nothing else.
+        assert panel_states == [DeviceState.INIT, DeviceState.READY]
+        # All 32 children registered
+        assert len(panel.children_ids()) == 32
+
+    def test_add_grandchild_flaps_only_immediate_parent(self, mock_paho):
+        """A grandchild add changes the immediate parent's children list, not the root's."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        bess = Device(id="bess-1", parent=panel)
+        mock_client.publish.reset_mock()
+
+        Device(id="mid-1", parent=bess)
+
+        # bess flaps INIT→READY (its description gained mid-1)
+        bess_states = _state_payloads_for(mock_client, "bess-1")
+        assert bess_states[-2:] == [DeviceState.INIT, DeviceState.READY]
+        # panel does NOT flap — its own children list is unchanged
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        assert DeviceState.INIT not in panel_states
+        assert DeviceState.READY not in panel_states
+
+    def test_delete_child_runs_remove_protocol(self, mock_paho):
+        """Deleting a child clears its retained data and flaps the parent."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        circuit = Device(id="circuit-1", parent=panel)
+        mock_client.publish.reset_mock()
+
+        circuit.delete()
+
+        # Child's $state, $description, etc. cleared (empty-string retained publishes)
+        cleared = [
+            c for c in mock_client.publish.call_args_list
+            if "/circuit-1/" in c[0][0] and c[0][1] == ""
+        ]
+        assert cleared, "expected retained-clear publishes for the deleted child"
+        # Detached from parent
+        assert circuit.parent() is None
+        assert "circuit-1" not in panel.children_ids()
+        # Parent flapped INIT→READY with new description
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        assert panel_states[-2:] == [DeviceState.INIT, DeviceState.READY]
+
+    def test_batched_deletes_produce_one_parent_flap(self, mock_paho):
+        """S3: removes inside parent.state_transition() collapse to one parent INIT→READY."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        circuits = [Device(id=f"c-{i}", parent=panel) for i in range(5)]
+        mock_client.publish.reset_mock()
+
+        with panel.state_transition():
+            for c in circuits:
+                c.delete()
+
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        assert panel_states == [DeviceState.INIT, DeviceState.READY]
+        assert panel.children_ids() == []
+
+    def test_delete_root_cascades_to_children(self, mock_paho):
+        """delete() on a root recursively deletes children first (leaves-first)."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        bess = Device(id="bess-1", parent=panel)
+        Device(id="mid-1", parent=bess)
+        mock_client.publish.reset_mock()
+
+        panel.delete()
+
+        # Every device in the tree had its $state cleared
+        for device_id in ("mid-1", "bess-1", "panel-1"):
+            cleared_state = [
+                c for c in mock_client.publish.call_args_list
+                if f"/{device_id}/$state" in c[0][0] and c[0][1] == ""
+            ]
+            assert cleared_state, f"expected $state retained-clear for {device_id}"
+
+
 class TestDeviceNodes:
     def test_new_node(self, mock_paho):
         device, _ = _make_device(mock_paho)

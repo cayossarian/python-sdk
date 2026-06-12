@@ -930,15 +930,25 @@ class Device:
         self._mqtt_cfg = mqtt_cfg if parent is None else None
         self._nodes = {}
         self._extensions = extensions
+        # True while inside _begin_state_transition()/__end_state_transition() pair.
+        # When set, child add/remove on this device suppresses the per-child parent flap
+        # so a batched `with parent.state_transition(): ...` adds N children in one INIT→READY.
+        self._in_transition = False
         # Distinguish between initial and subsequent connections to broker
         self.initial_broker_connection = True
         if parent is None:
             self.connect_broker()
         else:
             parent._children.append(self)
+        # Child's own INIT → publish description+nodes → READY (Homie add-child steps 1-3).
         with self.state_transition():
             for node in nodes:
                 self.add_node(node)
+        # Homie add-child steps 4-6: parent INIT → publish description (now includes self in
+        # `children`) → READY. Skipped if parent is mid-transition — in that case the parent's
+        # own state_transition will publish the updated description on exit (S1: 32 adds → 1 flap).
+        if parent is not None:
+            parent._notify_structural_change()
 
     def as_dict(self) -> dict:
         nodes = {}
@@ -1209,6 +1219,37 @@ class Device:
 
         logger.info(f"reason=deviceDeleteAllFromMqttComplete,deviceId={self._id}")
 
+    def delete(self) -> None:
+        """
+        Remove this device from the tree (Homie remove-child protocol).
+
+        On a child: clears the child's retained MQTT data (state, description,
+        all property values), detaches from parent, then triggers the parent
+        to republish its $description (without this child in `children`).
+        Parent's INIT→READY flap is suppressed if the parent is already mid
+        state_transition (S3: batched remove inside `with parent.state_transition()`).
+
+        On a root: clears all retained data for this device. (Does not stop
+        the MQTT client — that's the caller's responsibility, after which the
+        LWT publish covers the whole tree.)
+
+        After delete(), this Device object should not be used further.
+        """
+        logger.info(f"reason=deviceDelete,deviceId={self._id},isRoot={self._parent is None}")
+        # Recursively delete children first so the broker sees a leaves-first cleanup.
+        for child in list(self._children):
+            child.delete()
+        self.delete_all_from_mqtt()
+        # Also clear the device's $state retained topic — delete_all_from_mqtt only
+        # handles property values and $description.
+        base_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}"
+        self.clear_retained_topic(f"{base_topic}/$state")
+        if self._parent is not None:
+            parent = self._parent
+            parent._children.remove(self)
+            self._parent = None
+            parent._notify_structural_change()
+
     def clear_retained_topic(self, topic_path: str) -> bool:
         """
         Publish empty string to clear retained message on topic
@@ -1229,12 +1270,39 @@ class Device:
     def _begin_state_transition(self) -> None:
         """Set device state to INIT to begin a state transition"""
         logger.info(f"reason=deviceBeginStateTransition,deviceId={self._id}")
+        self._in_transition = True
         self.set_state(DeviceState.INIT)
 
     def _end_state_transition(self) -> None:
         """Set device state to READY and publish updated description"""
         logger.info(f"reason=deviceEndStateTransition,deviceId={self._id}")
         self.publish_description()
+        self.set_state(DeviceState.READY)
+        self._in_transition = False
+
+    def _notify_structural_change(self) -> None:
+        """
+        Republish this device's $description after a structural change
+        (a child was added or removed). Performs INIT → publish description
+        → READY unless this device is already inside a state_transition() —
+        in which case the in-progress transition will publish on exit and
+        we suppress the per-change flap (S1: many children, one parent cycle).
+
+        Safe to call before the device has been transitioned to READY at all
+        (state is None) — in that case we just publish the description with
+        no state flap.
+        """
+        if self._in_transition:
+            logger.debug(
+                f"reason=deviceStructuralChangeSuppressed,deviceId={self._id},inTransition=True"
+            )
+            return
+        if self._state != DeviceState.READY:
+            self.publish_description(republish=True)
+            return
+        # Steady-state structural change: full INIT → desc → READY cycle.
+        self.set_state(DeviceState.INIT)
+        self.publish("$description")
         self.set_state(DeviceState.READY)
 
     def state_transition(self) -> StateTransitionContext:
