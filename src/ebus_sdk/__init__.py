@@ -42,7 +42,7 @@ from .property import (
 # MQTT client
 from ebus_mqtt_client import MqttClient
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 __all__ = [
     # Homie classes
