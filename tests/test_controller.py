@@ -7,10 +7,13 @@ from unittest.mock import MagicMock, patch
 from ebus_sdk.homie import (
     Controller,
     DiscoveredDevice,
+    DeviceState,
     EBUS_HOMIE_DOMAIN,
     EBUS_HOMIE_VERSION_MAJOR,
     EBUS_HOMIE_MQTT_QOS,
+    HOMIE_EFFECTIVE_STATE_TABLE,
 )
+import pytest
 
 # ── DiscoveredDevice ─────────────────────────────────────────────────────
 
@@ -209,6 +212,137 @@ class TestControllerHierarchyNavigation:
         ctrl, _ = _make_controller(mock_paho)
         assert ctrl.get_children("never-seen") == []
         assert ctrl.get_descendants("never-seen") == []
+
+
+class TestEffectiveStateTable:
+    """SDK-zt2: HOMIE_EFFECTIVE_STATE_TABLE shape."""
+
+    def test_table_covers_all_states(self):
+        for state in DeviceState:
+            assert state in HOMIE_EFFECTIVE_STATE_TABLE, (
+                f"DeviceState.{state.name} missing from precedence table"
+            )
+
+    def test_only_ready_maps_to_none(self):
+        """Per spec: only when root is READY do children's own states stand."""
+        for state, override in HOMIE_EFFECTIVE_STATE_TABLE.items():
+            if state == DeviceState.READY:
+                assert override is None
+            else:
+                assert override == state, f"non-ready root {state} should propagate as itself"
+
+
+class TestControllerEffectiveState:
+    """SDK-zt2: Controller.get_effective_state()."""
+
+    @staticmethod
+    def _discover(ctrl, device_id, state, description=None):
+        ctrl._on_state_message(
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/$state",
+            state.encode(),
+        )
+        if description is not None:
+            ctrl._on_description_message(
+                device_id,
+                f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/$description",
+                json.dumps(description).encode(),
+            )
+
+    def test_root_returns_own_state(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        self._discover(ctrl, "panel-1", "ready", {"homie": "5.0"})
+
+        assert ctrl.get_effective_state("panel-1") == "ready"
+
+    def test_unknown_device_returns_none(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho)
+        assert ctrl.get_effective_state("never-seen") is None
+
+    @pytest.mark.parametrize(
+        "root_state,child_own,expected",
+        [
+            ("ready", "ready", "ready"),
+            ("ready", "init", "init"),
+            ("ready", "sleeping", "sleeping"),
+            ("ready", "lost", "lost"),
+            ("init", "ready", "init"),
+            ("disconnected", "ready", "disconnected"),
+            ("disconnected", "lost", "disconnected"),
+            ("sleeping", "ready", "sleeping"),
+            ("lost", "ready", "lost"),
+            ("lost", "init", "lost"),
+        ],
+    )
+    def test_child_effective_state_per_spec(self, mock_paho, root_state, child_own, expected):
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        self._discover(ctrl, "panel-1", root_state, {"homie": "5.0", "children": ["bess-1"]})
+        self._discover(
+            ctrl,
+            "bess-1",
+            child_own,
+            {"homie": "5.0", "root": "panel-1", "parent": "panel-1"},
+        )
+
+        assert ctrl.get_effective_state("bess-1") == expected
+
+    def test_grandchild_uses_root_not_intermediate(self, mock_paho):
+        """S2 + zt2: grandchild's effective state derives from ROOT, not parent.
+        Parent in ready, root in lost → grandchild effectively lost."""
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        self._discover(ctrl, "panel-1", "lost", {"homie": "5.0", "children": ["bess-1"]})
+        self._discover(
+            ctrl, "bess-1", "ready",
+            {"homie": "5.0", "root": "panel-1", "parent": "panel-1", "children": ["mid-1"]},
+        )
+        self._discover(
+            ctrl, "mid-1", "ready",
+            {"homie": "5.0", "root": "panel-1", "parent": "bess-1"},
+        )
+
+        assert ctrl.get_effective_state("mid-1") == "lost"
+        assert ctrl.get_effective_state("bess-1") == "lost"
+        assert ctrl.get_effective_state("panel-1") == "lost"
+
+    def test_child_with_missing_root_falls_back_to_own_state(self, mock_paho):
+        """When the root isn't discovered yet, return child's own state as best-effort."""
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        # Discover child first with no parent description for the root
+        self._discover(
+            ctrl, "bess-1", "ready",
+            {"homie": "5.0", "root": "panel-1", "parent": "panel-1"},
+        )
+        # panel-1 not in registry yet
+
+        assert ctrl.get_effective_state("bess-1") == "ready"
+
+    def test_one_lost_root_makes_whole_tree_lost(self, mock_paho):
+        """S5/S6 acceptance: when the panel goes LWT-lost, every descendant is effectively lost."""
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        # Build a 30-device tree
+        self._discover(ctrl, "panel-1", "ready", {"homie": "5.0", "children": [f"c-{i}" for i in range(30)]})
+        for i in range(30):
+            self._discover(
+                ctrl, f"c-{i}", "ready",
+                {"homie": "5.0", "root": "panel-1", "parent": "panel-1"},
+            )
+        # Sanity: all ready
+        for i in range(30):
+            assert ctrl.get_effective_state(f"c-{i}") == "ready"
+
+        # Panel goes lost (LWT fires)
+        ctrl._on_state_message(
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/$state",
+            b"lost",
+        )
+
+        # All children now effectively lost without re-publishing themselves
+        for i in range(30):
+            assert ctrl.get_effective_state(f"c-{i}") == "lost", f"c-{i} not lost"
 
 
 # ── Controller ───────────────────────────────────────────────────────────

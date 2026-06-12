@@ -177,6 +177,25 @@ class DeviceState(StrEnum):
     LOST = "lost"
 
 
+# Homie 5 effective-state precedence table (SDK-zt2).
+#
+# A non-root device's effective state is determined by its root's reported state:
+# whenever the root is in a non-ready state, that state propagates down the tree
+# (the root is the gateway to the children, so if it's lost/disconnected/sleeping/
+# init the children are effectively the same). Only when the root is `ready` do
+# the children's own reported states stand.
+#
+# Mapping: root_state -> override_for_children. A None value means "no override,
+# use the child's own state".
+HOMIE_EFFECTIVE_STATE_TABLE: dict = {
+    DeviceState.INIT: DeviceState.INIT,
+    DeviceState.DISCONNECTED: DeviceState.DISCONNECTED,
+    DeviceState.SLEEPING: DeviceState.SLEEPING,
+    DeviceState.LOST: DeviceState.LOST,
+    DeviceState.READY: None,
+}
+
+
 class Property:
     """
     Object representing a Homie MQTT Property
@@ -2048,6 +2067,32 @@ class Controller:
                 out.append(child)
                 queue.append(child.device_id)
         return out
+
+    def get_effective_state(self, device_id: str) -> Optional[str]:
+        """
+        Return the device's effective state per the Homie 5 spec (SDK-zt2).
+
+        For a root device: returns its own reported state.
+
+        For a child: applies HOMIE_EFFECTIVE_STATE_TABLE — when the root is in a
+        non-ready state (init/disconnected/sleeping/lost), that state propagates
+        down the tree. Only when the root is ready do children's own states stand.
+
+        Returns None when the device isn't discovered. Returns the device's own
+        state (best-effort) when the device's named root isn't yet discovered —
+        Homie 5's "root may be missing" case is rare in practice but worth
+        handling cleanly.
+        """
+        device = self.devices.get(device_id)
+        if device is None:
+            return None
+        if device.is_root:
+            return device.state
+        root = self.get_root(device_id)
+        if root is None or root.state is None:
+            return device.state
+        override = HOMIE_EFFECTIVE_STATE_TABLE.get(root.state)
+        return override if override is not None else device.state
 
     def stop(self) -> None:
         """Stop the controller, release resources, and disconnect from broker"""

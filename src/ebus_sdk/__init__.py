@@ -22,7 +22,7 @@ from .homie import (
 )
 
 # Constants
-from .homie import EBUS_HOMIE_MQTT_QOS
+from .homie import EBUS_HOMIE_MQTT_QOS, HOMIE_EFFECTIVE_STATE_TABLE
 
 # Utility functions
 from .homie import (
@@ -58,6 +58,7 @@ __all__ = [
     "Unit",
     # Constants
     "EBUS_HOMIE_MQTT_QOS",
+    "HOMIE_EFFECTIVE_STATE_TABLE",
     # Utilities
     "datatype_from_type",
     "ebus_cfg_add_auth",
