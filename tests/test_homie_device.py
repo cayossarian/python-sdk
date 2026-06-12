@@ -1224,6 +1224,25 @@ class TestDevicePublish:
         device.publish_nodes()
         mock_node.publish.assert_called_once()
 
+    def test_publish_nodes_snapshots_against_concurrent_add(self, mock_paho):
+        """SDK-e3k: publish_nodes() must snapshot self._nodes so the main
+        thread adding a node mid-iteration doesn't raise
+        'dictionary changed size during iteration' on the MQTT loop thread."""
+        device, _ = _make_device(mock_paho)
+
+        # Simulate the race: while iterating, one node's publish() mutates
+        # the underlying dict (as the main thread's add_node would).
+        racing_node = MagicMock()
+
+        def mutate_during_publish():
+            device._nodes["late-arrival"] = MagicMock()
+
+        racing_node.publish.side_effect = mutate_during_publish
+        device._nodes = {"core": racing_node}
+
+        # Without the list() snapshot fix, this raises RuntimeError.
+        device.publish_nodes()
+
 
 class TestDeviceOnConnect:
     def test_initial_connection(self, mock_paho):
@@ -1357,6 +1376,33 @@ class TestDeviceRefreshTree:
                 f"missing $description for {device_id} in {topics}"
             )
             assert any(f"/{device_id}/$state" in t for t in topics), f"missing $state for {device_id} in {topics}"
+
+    def test_refresh_tree_snapshots_against_concurrent_child_add(self, mock_paho):
+        """SDK-e3k: refresh_tree() must snapshot self._children so a child
+        appended by the main thread mid-cascade isn't pulled into the current
+        republish on the MQTT loop thread. (Lists don't raise on
+        mutation-during-iteration the way dicts do, but processing a
+        half-constructed child is its own correctness hazard.)"""
+        root, _ = _make_device(mock_paho, device_id="panel-1")
+        existing_child = Device(id="circuit-a", parent=root)
+        late_arrival = MagicMock(spec=Device)
+
+        original_refresh = existing_child.refresh_tree
+
+        def mutate_during_refresh():
+            # Simulate the main thread appending a new child while the MQTT
+            # thread is mid-cascade.
+            root._children.append(late_arrival)
+            original_refresh()
+
+        existing_child.refresh_tree = mutate_during_refresh
+
+        root.refresh_tree()
+
+        # Snapshot semantics: late_arrival was appended after iteration began,
+        # so it must NOT be touched by this refresh cycle. Without the
+        # list() snapshot, CPython's list iterator picks it up.
+        late_arrival.refresh_tree.assert_not_called()
 
     def test_refresh_tree_three_levels(self, mock_paho):
         """S2 + S6: grandchildren also republish on reconnect."""

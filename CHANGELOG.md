@@ -4,6 +4,13 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-06-12
+
+### Fixed
+
+- `Device.publish_nodes()` no longer crashes with `RuntimeError: dictionary changed size during iteration` when the main thread adds a node while the MQTT loop thread is publishing on initial broker connect. Iteration now goes through a `list(self._nodes.values())` snapshot — matching the defensive pattern already used in `delete_all_from_mqtt()`. Hit on a SPAN G2 panel immediately after deploy; systemd subsequently SIGKILLed the unresponsive process, restart recovered.
+- `Device.refresh_tree()` similarly snapshots `self._children` before recursing. Lists don't raise on mutation-during-iteration, but CPython's list iterator would otherwise pull a half-constructed child added mid-cascade into the current reconnect republish — matching the defensive pattern in `Device.delete()`.
+
 ## [0.2.1] — 2026-06-12
 
 ### Added
@@ -53,7 +60,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.2
 [0.2.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.0
 [0.1.7]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.1.7

@@ -1421,7 +1421,9 @@ class Device:
             f"nodeCount={len(self._nodes)},childCount={len(self._children)}"
         )
         self._publish_self()
-        for child in self._children:
+        # Snapshot — main thread may construct child devices (which append
+        # to self._children) while this runs on the MQTT loop thread.
+        for child in list(self._children):
             child.refresh_tree()
 
     def publish(self, attribute: str = "", value: Optional[Any] = None) -> None:
@@ -1498,7 +1500,11 @@ class Device:
                 self.publish("$description")
 
     def publish_nodes(self) -> None:
-        for node in self._nodes.values():
+        # Snapshot — invoked from on_connect() on the MQTT loop thread while
+        # the main thread may be inside state_transition() calling add_node().
+        # Without the snapshot, dict-size-changed-during-iteration crashes the
+        # MQTT thread on initial connect.
+        for node in list(self._nodes.values()):
             node.publish()
 
     def on_connect(self) -> None:
