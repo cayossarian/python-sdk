@@ -28,6 +28,7 @@ from .homie import EBUS_HOMIE_MQTT_QOS, HOMIE_EFFECTIVE_STATE_TABLE
 from .homie import (
     datatype_from_type,
     ebus_cfg_add_auth,
+    sanitize_homie_id,
 )
 
 # Property abstractions
@@ -42,7 +43,7 @@ from .property import (
 # MQTT client
 from ebus_mqtt_client import MqttClient
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     # Homie classes
@@ -62,6 +63,7 @@ __all__ = [
     # Utilities
     "datatype_from_type",
     "ebus_cfg_add_auth",
+    "sanitize_homie_id",
     # Property abstractions
     "ObservableProperty",
     "GroupedPropertyDict",

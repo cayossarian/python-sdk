@@ -39,6 +39,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from enum import Enum
@@ -132,6 +133,40 @@ class PropertyDatatype(StrEnum):
     DATETIME = "datetime"
     DURATION = "duration"
     JSON = "json"
+
+
+def sanitize_homie_id(value: Optional[str]) -> str:
+    """Coerce an arbitrary string to a Homie-legal id segment (a-z, 0-9, -).
+
+    The Homie 5 spec requires device-ids and node/property ids to match
+    ``[a-z][a-z0-9-]*``. This helper coerces vendor-supplied strings
+    (serial numbers, model names, etc.) to a legal form by:
+
+      1. lowercasing
+      2. replacing underscores, whitespace, and dots with hyphens
+      3. dropping any other character outside ``[a-z0-9-]``
+      4. collapsing runs of hyphens
+      5. stripping leading/trailing hyphens
+
+    Empty input (``None`` or empty string) returns an empty string. The
+    caller is responsible for handling the empty-string case — e.g. by
+    falling back to a synthesized id when the sanitized form is empty,
+    or by raising if the value was required to be non-empty.
+
+    Composing device-ids from multiple vendor-supplied segments (e.g.
+    ``f"{panel_serial}-{bess_serial}"``) MUST apply this helper to each
+    segment independently, so that publisher and consumer always agree
+    on the resulting Homie-legal id. Composing first and sanitizing the
+    composite is not equivalent — a hyphen-joiner can be collapsed if an
+    adjacent segment ends/begins with characters that drop out.
+    """
+    if not value:
+        return ""
+    result = value.lower()
+    result = re.sub(r"[_\s.]+", "-", result)
+    result = re.sub(r"[^a-z0-9-]", "", result)
+    result = re.sub(r"-+", "-", result)
+    return result.strip("-")
 
 
 def datatype_from_type(type: Type) -> Optional[PropertyDatatype]:

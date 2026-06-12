@@ -15,6 +15,7 @@ from ebus_sdk.homie import (
     Unit,
     datatype_from_type,
     ebus_cfg_add_auth,
+    sanitize_homie_id,
     EBUS_HOMIE_DOMAIN,
     EBUS_HOMIE_MQTT_QOS,
     EBUS_HOMIE_VERSION_MAJOR,
@@ -91,6 +92,61 @@ class TestDatatypeFromType:
 
     def test_unknown_returns_none(self):
         assert datatype_from_type(list) is None
+
+
+# ── sanitize_homie_id ────────────────────────────────────────────────────
+
+
+class TestSanitizeHomieId:
+    def test_empty_string(self):
+        assert sanitize_homie_id("") == ""
+
+    def test_none(self):
+        assert sanitize_homie_id(None) == ""
+
+    def test_already_legal(self):
+        assert sanitize_homie_id("device-1") == "device-1"
+
+    def test_lowercases(self):
+        # Tesla Powerwall serial — the real bug from G3P-23496
+        assert sanitize_homie_id("TG121153003K7G") == "tg121153003k7g"
+
+    def test_underscore_to_hyphen(self):
+        assert sanitize_homie_id("my_device_id") == "my-device-id"
+
+    def test_whitespace_to_hyphen(self):
+        assert sanitize_homie_id("my device id") == "my-device-id"
+
+    def test_dot_to_hyphen(self):
+        assert sanitize_homie_id("v1.2.3") == "v1-2-3"
+
+    def test_drops_illegal_chars(self):
+        # Slashes, plus signs, etc. drop out entirely
+        assert sanitize_homie_id("a/b+c") == "abc"
+
+    def test_collapses_runs_of_hyphens(self):
+        assert sanitize_homie_id("a---b") == "a-b"
+
+    def test_collapses_mixed_separators(self):
+        # Underscore + space + dot all become hyphens, then collapsed
+        assert sanitize_homie_id("a_ .b") == "a-b"
+
+    def test_strips_leading_trailing_hyphens(self):
+        assert sanitize_homie_id("-abc-") == "abc"
+
+    def test_strips_leading_trailing_from_separators(self):
+        assert sanitize_homie_id(" abc ") == "abc"
+
+    def test_all_illegal_collapses_to_empty(self):
+        # Caller is responsible for handling empty result
+        assert sanitize_homie_id("///+++") == ""
+
+    def test_only_separators_collapses_to_empty(self):
+        assert sanitize_homie_id("___") == ""
+
+    def test_complex_composition(self):
+        # Vendor-supplied composite: capitals, underscore, dot, illegal char
+        assert sanitize_homie_id("My_Device.v1/2") == "my-device-v12"
 
 
 # ── Unit enum ────────────────────────────────────────────────────────────

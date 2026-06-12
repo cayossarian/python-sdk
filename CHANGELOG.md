@@ -4,6 +4,12 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-12
+
+### Added
+
+- `ebus_sdk.sanitize_homie_id(value)` — coerce an arbitrary vendor-supplied string (serial number, model name, etc.) to a Homie-legal id segment matching `[a-z0-9-]+`. Lowercases, maps underscores / whitespace / dots to hyphens, drops other illegal characters, collapses hyphen runs, strips leading/trailing hyphens. Single source of truth so a publisher composing a child device-id and a consumer composing the same id-as-a-pointer can never disagree. Replaces (and obsoletes) the ad-hoc `_sanitize_homie_id` copies that had begun to accumulate in downstream consumers.
+
 ## [0.2.0] — 2026-06-11
 
 The 0.2.0 release introduces first-class parent/child device trees on both the device (publisher) and controller (consumer) sides of the SDK. A panel-style root device can now own dozens of child devices that share a single MQTT connection and a single Last Will, and controllers can navigate the resulting tree and compute effective state per the Homie 5 spec without re-implementing the rules per consumer.
@@ -47,7 +53,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.0
 [0.1.7]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.1.7
 [0.1.2]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.1.2
