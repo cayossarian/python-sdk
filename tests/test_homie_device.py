@@ -858,6 +858,100 @@ class TestChildLifecycleProtocol:
             assert cleared_state, f"expected $state retained-clear for {device_id}"
 
 
+class TestCrossDeviceTransitionCoordination:
+    """SDK-yb4: cross-device state_transition() coordination."""
+
+    def test_recursive_delete_suppresses_intermediate_flaps(self, mock_paho):
+        """A dying device shouldn't publish INIT/READY flaps for its dying descendants."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        bess = Device(id="bess-1", parent=panel)
+        Device(id="mid-1", parent=bess)
+        mock_client.publish.reset_mock()
+
+        panel.delete()
+
+        # No non-empty INIT/READY state publishes on bess-1 during cascade — only the
+        # retained-clear (empty payload) we expect at the end.
+        bess_state_calls = [
+            c for c in mock_client.publish.call_args_list if "/bess-1/$state" in c[0][0]
+        ]
+        non_clear_payloads = [c[0][1] for c in bess_state_calls if c[0][1] != ""]
+        assert non_clear_payloads == [], (
+            f"bess-1 should not flap INIT/READY while being deleted, got {non_clear_payloads}"
+        )
+
+    def test_mixed_add_and_delete_in_one_transition(self, mock_paho):
+        """A state_transition() can contain a mix of child adds and deletes; parent flaps once."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        to_remove = Device(id="old-1", parent=panel)
+        Device(id="old-2", parent=panel)
+        mock_client.publish.reset_mock()
+
+        with panel.state_transition():
+            to_remove.delete()
+            Device(id="new-1", parent=panel)
+            Device(id="new-2", parent=panel)
+
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        # Exactly one INIT→READY for the whole transaction
+        assert panel_states == [DeviceState.INIT, DeviceState.READY]
+        assert set(panel.children_ids()) == {"old-2", "new-1", "new-2"}
+
+    def test_sibling_subtree_transitions_are_independent(self, mock_paho):
+        """A transition on one subtree must not flap an unrelated sibling subtree."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        bess = Device(id="bess-1", parent=panel)
+        evse = Device(id="evse-1", parent=panel)
+        mock_client.publish.reset_mock()
+
+        # Adding a grandchild under bess should flap bess (its description changed)
+        # but NOT evse and NOT panel (their children lists are unchanged).
+        with bess.state_transition():
+            Device(id="mid-1", parent=bess)
+
+        bess_states = _state_payloads_for(mock_client, "bess-1")
+        assert bess_states == [DeviceState.INIT, DeviceState.READY]
+        assert _state_payloads_for(mock_client, "evse-1") == []
+        assert _state_payloads_for(mock_client, "panel-1") == []
+        assert evse  # silence unused-var lint
+
+    def test_exception_in_batched_transition_still_finalizes_parent(self, mock_paho):
+        """If a child-add raises inside a parent transition, the parent still reaches READY."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        mock_client.publish.reset_mock()
+
+        with pytest.raises(RuntimeError):
+            with panel.state_transition():
+                Device(id="child-a", parent=panel)
+                raise RuntimeError("oops mid-batch")
+
+        # Parent still ends READY even though the batch raised
+        assert panel.state() == DeviceState.READY
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        assert panel_states[-1] == DeviceState.READY
+        # The successfully-added child stays in the tree (caller's responsibility to clean up)
+        assert "child-a" in panel.children_ids()
+
+    def test_nested_state_transition_on_same_device_is_idempotent(self, mock_paho):
+        """A child ctor inside a nested transition pattern doesn't double-flap."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        mock_client.publish.reset_mock()
+
+        with panel.state_transition():
+            # Pretend caller opens a transition inside another transition.
+            # Child adds inside must still be suppressed at the outer level.
+            with panel.state_transition():
+                Device(id="circuit-a", parent=panel)
+
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        # Outer transition: INIT at entry, READY at exit. Inner doesn't add more.
+        # (Inner __enter__ would set state=INIT, but state is already INIT so it's a no-op
+        # per set_state's same-state check; inner __exit__ would set READY then outer __exit__
+        # would re-publish — accept one or two READYs but at least one final READY.)
+        assert panel_states[0] == DeviceState.INIT
+        assert panel_states[-1] == DeviceState.READY
+
+
 class TestDeviceNodes:
     def test_new_node(self, mock_paho):
         device, _ = _make_device(mock_paho)

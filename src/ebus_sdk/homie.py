@@ -1233,21 +1233,33 @@ class Device:
         the MQTT client — that's the caller's responsibility, after which the
         LWT publish covers the whole tree.)
 
+        While delete() is running, this device acts as if it were mid
+        state_transition so descendants' delete()-triggered parent-flap
+        notifications collapse into nothing — a recursive teardown shouldn't
+        publish gratuitous INIT/READY on dying devices.
+
         After delete(), this Device object should not be used further.
         """
         logger.info(f"reason=deviceDelete,deviceId={self._id},isRoot={self._parent is None}")
-        # Recursively delete children first so the broker sees a leaves-first cleanup.
-        for child in list(self._children):
-            child.delete()
-        self.delete_all_from_mqtt()
-        # Also clear the device's $state retained topic — delete_all_from_mqtt only
-        # handles property values and $description.
-        base_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}"
-        self.clear_retained_topic(f"{base_topic}/$state")
+        # Suppress structural-change notifications from descendants we're about to
+        # tear down — they'd be calling _notify_structural_change on a corpse.
+        self._in_transition = True
+        try:
+            # Recursively delete children first so the broker sees a leaves-first cleanup.
+            for child in list(self._children):
+                child.delete()
+            self.delete_all_from_mqtt()
+            # Also clear the device's $state retained topic — delete_all_from_mqtt only
+            # handles property values and $description.
+            base_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}"
+            self.clear_retained_topic(f"{base_topic}/$state")
+        finally:
+            self._in_transition = False
         if self._parent is not None:
             parent = self._parent
             parent._children.remove(self)
             self._parent = None
+            # Only fires if parent isn't itself mid-delete or mid state_transition.
             parent._notify_structural_change()
 
     def clear_retained_topic(self, topic_path: str) -> bool:
