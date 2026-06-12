@@ -933,23 +933,48 @@ class TestCrossDeviceTransitionCoordination:
         assert "child-a" in panel.children_ids()
 
     def test_nested_state_transition_on_same_device_is_idempotent(self, mock_paho):
-        """A child ctor inside a nested transition pattern doesn't double-flap."""
+        """SDK-v3p: nested state_transition() emits exactly one INIT and one READY.
+
+        Init→ready forces every controller in the wild to resync, so emitting
+        only the minimum is a correctness concern, not a polish concern.
+        """
         panel, mock_client = _make_device(mock_paho, device_id="panel-1")
         mock_client.publish.reset_mock()
 
         with panel.state_transition():
-            # Pretend caller opens a transition inside another transition.
-            # Child adds inside must still be suppressed at the outer level.
             with panel.state_transition():
                 Device(id="circuit-a", parent=panel)
 
         panel_states = _state_payloads_for(mock_client, "panel-1")
-        # Outer transition: INIT at entry, READY at exit. Inner doesn't add more.
-        # (Inner __enter__ would set state=INIT, but state is already INIT so it's a no-op
-        # per set_state's same-state check; inner __exit__ would set READY then outer __exit__
-        # would re-publish — accept one or two READYs but at least one final READY.)
-        assert panel_states[0] == DeviceState.INIT
-        assert panel_states[-1] == DeviceState.READY
+        assert panel_states == [DeviceState.INIT, DeviceState.READY]
+        # And the child was added correctly
+        assert "circuit-a" in panel.children_ids()
+
+    def test_triply_nested_state_transition_is_idempotent(self, mock_paho):
+        """SDK-v3p: depth-3 nesting still emits exactly one INIT and one READY."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        mock_client.publish.reset_mock()
+
+        with panel.state_transition():
+            with panel.state_transition():
+                with panel.state_transition():
+                    Device(id="circuit-a", parent=panel)
+                    Device(id="circuit-b", parent=panel)
+
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        assert panel_states == [DeviceState.INIT, DeviceState.READY]
+        assert set(panel.children_ids()) == {"circuit-a", "circuit-b"}
+
+    def test_single_state_transition_emits_exactly_one_init_ready(self, mock_paho):
+        """Baseline guard: even with no nesting, exactly one INIT and one READY."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        mock_client.publish.reset_mock()
+
+        with panel.state_transition():
+            Device(id="circuit-a", parent=panel)
+
+        panel_states = _state_payloads_for(mock_client, "panel-1")
+        assert panel_states == [DeviceState.INIT, DeviceState.READY]
 
 
 class TestDeviceNodes:

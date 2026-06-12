@@ -949,10 +949,12 @@ class Device:
         self._mqtt_cfg = mqtt_cfg if parent is None else None
         self._nodes = {}
         self._extensions = extensions
-        # True while inside _begin_state_transition()/__end_state_transition() pair.
-        # When set, child add/remove on this device suppresses the per-child parent flap
-        # so a batched `with parent.state_transition(): ...` adds N children in one INIT→READY.
-        self._in_transition = False
+        # Counter of how many state_transition() / delete() scopes are currently active
+        # on this device. >0 means "a transition is in progress" — suppresses child-induced
+        # parent flaps and makes nested state_transition()s reentrant (only the outermost
+        # entry/exit publishes INIT/READY). Init→ready transitions force every controller
+        # in the wild to resync, so emitting only the minimum is a correctness concern.
+        self._transition_depth = 0
         # Distinguish between initial and subsequent connections to broker
         self.initial_broker_connection = True
         if parent is None:
@@ -1260,9 +1262,10 @@ class Device:
         After delete(), this Device object should not be used further.
         """
         logger.info(f"reason=deviceDelete,deviceId={self._id},isRoot={self._parent is None}")
-        # Suppress structural-change notifications from descendants we're about to
-        # tear down — they'd be calling _notify_structural_change on a corpse.
-        self._in_transition = True
+        # Bump transition depth so structural-change notifications from descendants
+        # we're about to tear down get suppressed — they'd be calling
+        # _notify_structural_change on a corpse.
+        self._transition_depth += 1
         try:
             # Recursively delete children first so the broker sees a leaves-first cleanup.
             for child in list(self._children):
@@ -1273,7 +1276,7 @@ class Device:
             base_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}"
             self.clear_retained_topic(f"{base_topic}/$state")
         finally:
-            self._in_transition = False
+            self._transition_depth -= 1
         if self._parent is not None:
             parent = self._parent
             parent._children.remove(self)
@@ -1299,17 +1302,36 @@ class Device:
             return False
 
     def _begin_state_transition(self) -> None:
-        """Set device state to INIT to begin a state transition"""
-        logger.info(f"reason=deviceBeginStateTransition,deviceId={self._id}")
-        self._in_transition = True
-        self.set_state(DeviceState.INIT)
+        """
+        Enter a state-transition scope.
+
+        Re-entrant: only the outermost entry publishes INIT (set_state's
+        same-state no-op would suppress redundant INIT publishes anyway,
+        but skipping the set_state() call avoids the log noise too).
+        """
+        self._transition_depth += 1
+        logger.info(
+            f"reason=deviceBeginStateTransition,deviceId={self._id},depth={self._transition_depth}"
+        )
+        if self._transition_depth == 1:
+            self.set_state(DeviceState.INIT)
 
     def _end_state_transition(self) -> None:
-        """Set device state to READY and publish updated description"""
-        logger.info(f"reason=deviceEndStateTransition,deviceId={self._id}")
-        self.publish_description()
-        self.set_state(DeviceState.READY)
-        self._in_transition = False
+        """
+        Exit a state-transition scope.
+
+        Re-entrant: only the outermost exit publishes the final $description
+        and flips state to READY. Inner exits decrement the depth and return
+        — letting the outermost scope batch everything into one INIT→READY
+        cycle so controllers only resync once per logical change-set.
+        """
+        logger.info(
+            f"reason=deviceEndStateTransition,deviceId={self._id},depth={self._transition_depth}"
+        )
+        if self._transition_depth == 1:
+            self.publish_description()
+            self.set_state(DeviceState.READY)
+        self._transition_depth -= 1
 
     def _notify_structural_change(self) -> None:
         """
@@ -1323,9 +1345,10 @@ class Device:
         (state is None) — in that case we just publish the description with
         no state flap.
         """
-        if self._in_transition:
+        if self._transition_depth > 0:
             logger.debug(
-                f"reason=deviceStructuralChangeSuppressed,deviceId={self._id},inTransition=True"
+                f"reason=deviceStructuralChangeSuppressed,deviceId={self._id},"
+                f"transitionDepth={self._transition_depth}"
             )
             return
         if self._state != DeviceState.READY:
