@@ -1249,12 +1249,29 @@ class Device:
         """
         return StateTransitionContext(self)
 
-    def refresh_all_nodes(self) -> None:
-        """Republish entire device state (for reconnection)"""
-        logger.info(f"reason=deviceRefreshAllNodes,deviceId={self._id},nodeCount={len(self._nodes)}")
-        self.publish_description()
+    def _publish_self(self) -> None:
+        """
+        Republish this single device's description, nodes, and state.
+        No INIT/READY flap — used by reconnect cascade where we just want
+        the broker to see what's already true.
+        """
+        self.publish_description(republish=True)
         self.publish_nodes()
         self.publish_state()
+
+    def refresh_tree(self) -> None:
+        """
+        Republish this device and every descendant (description, nodes,
+        property values, state). Used on broker reconnect (S6) so the entire
+        tree's retained-state is re-established under the root's connection.
+        """
+        logger.info(
+            f"reason=deviceRefreshTree,deviceId={self._id},"
+            f"nodeCount={len(self._nodes)},childCount={len(self._children)}"
+        )
+        self._publish_self()
+        for child in self._children:
+            child.refresh_tree()
 
     def publish(self, attribute: str = "", value: Optional[Any] = None) -> None:
         """
@@ -1335,9 +1352,14 @@ class Device:
 
     def on_connect(self) -> None:
         """
-        This method will be called when the Homie/eBus client connects to the broker
-        ATM the callback function signature has no arguments so use functools.partial to wrap this method
-        Current intended use is to re-publish the Device's $state on connection (especially re-connection)
+        Called when the root device's MQTT connection (re-)opens. Only roots
+        register a connection — children share, so this only fires on the root.
+
+        Initial connection: publish own nodes (FIX for G3P-19041); children
+        constructed later publish themselves via state_transition + add_node.
+
+        Reconnect: walk the entire tree and republish every device's
+        description, nodes, property values, and $state (S6).
         """
         logger.info(f"reason=deviceOnConnectInvocation,initialBrokerConnection={self.initial_broker_connection}")
         if self.initial_broker_connection:
@@ -1345,12 +1367,11 @@ class Device:
             # Also publish nodes on initial connection, FIX for G3P-19041
             self.publish_nodes()
         else:
-            logger.info(f"reason=deviceRepublishingAfterReconnect,nodeCount={len(self._nodes)}")
-            for node_id in self._nodes.keys():
-                logger.debug(f"reason=deviceRepublishingNode,nodeId={node_id}")
-            self.publish_description(republish=True)
-            self.publish_nodes()
-            self.publish_state()
+            logger.info(
+                f"reason=deviceRepublishingAfterReconnect,rootId={self._id},"
+                f"nodeCount={len(self._nodes)},childCount={len(self._children)}"
+            )
+            self.refresh_tree()
 
     def connect_broker(self) -> None:
         """

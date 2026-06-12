@@ -1032,16 +1032,63 @@ class TestDeviceConnectBroker:
             mock_from_config.assert_not_called()
 
 
-class TestDeviceRefreshAllNodes:
-    def test_refresh_all_nodes(self, mock_paho):
+class TestDeviceRefreshTree:
+    def test_refresh_tree_single_device(self, mock_paho):
         device, mock_client = _make_device(mock_paho)
         mock_client.publish.reset_mock()
 
-        device.refresh_all_nodes()
+        device.refresh_tree()
 
         topics = [c[0][0] for c in mock_client.publish.call_args_list]
         assert any("$description" in t for t in topics)
         assert any("$state" in t for t in topics)
+
+    def test_refresh_tree_cascades_to_children(self, mock_paho):
+        """S6: reconnect republish must touch every device in the tree."""
+        root, mock_client = _make_device(mock_paho, device_id="panel-1")
+        Device(id="circuit-a", parent=root)
+        Device(id="circuit-b", parent=root)
+        mock_client.publish.reset_mock()
+
+        root.refresh_tree()
+
+        topics = [c[0][0] for c in mock_client.publish.call_args_list]
+        # Each device publishes its own $description and $state through the shared client
+        for device_id in ("panel-1", "circuit-a", "circuit-b"):
+            assert any(f"/{device_id}/$description" in t for t in topics), (
+                f"missing $description for {device_id} in {topics}"
+            )
+            assert any(f"/{device_id}/$state" in t for t in topics), (
+                f"missing $state for {device_id} in {topics}"
+            )
+
+    def test_refresh_tree_three_levels(self, mock_paho):
+        """S2 + S6: grandchildren also republish on reconnect."""
+        root, mock_client = _make_device(mock_paho, device_id="panel-1")
+        bess = Device(id="bess-1", parent=root)
+        Device(id="mid-1", parent=bess)
+        mock_client.publish.reset_mock()
+
+        root.refresh_tree()
+
+        topics = [c[0][0] for c in mock_client.publish.call_args_list]
+        assert any("/mid-1/$description" in t for t in topics)
+        assert any("/mid-1/$state" in t for t in topics)
+
+    def test_on_connect_reconnect_cascades(self, mock_paho):
+        """On reconnect, root.on_connect() walks the whole tree."""
+        root, mock_client = _make_device(mock_paho, device_id="panel-1")
+        Device(id="circuit-a", parent=root)
+        # Flip from initial to reconnect path
+        root.initial_broker_connection = False
+        mock_client.publish.reset_mock()
+
+        root.on_connect()
+
+        topics = [c[0][0] for c in mock_client.publish.call_args_list]
+        assert any("/panel-1/$description" in t for t in topics)
+        assert any("/circuit-a/$description" in t for t in topics)
+        assert any("/circuit-a/$state" in t for t in topics)
 
 
 class TestDeviceNowEms:
