@@ -728,19 +728,13 @@ class TestDeviceStateTransition:
 def _state_payloads_for(mock_client, device_id):
     """Return the sequence of $state payloads published for the given device id."""
     topic_prefix = f"/{device_id}/$state"
-    return [
-        c[0][1]
-        for c in mock_client.publish.call_args_list
-        if topic_prefix in c[0][0]
-    ]
+    return [c[0][1] for c in mock_client.publish.call_args_list if topic_prefix in c[0][0]]
 
 
 def _description_publishes_for(mock_client, device_id):
     """Return count of $description publishes for the given device id."""
     topic_prefix = f"/{device_id}/$description"
-    return sum(
-        1 for c in mock_client.publish.call_args_list if topic_prefix in c[0][0]
-    )
+    return sum(1 for c in mock_client.publish.call_args_list if topic_prefix in c[0][0])
 
 
 class TestChildLifecycleProtocol:
@@ -765,11 +759,13 @@ class TestChildLifecycleProtocol:
         assert _description_publishes_for(mock_client, "panel-1") >= 1
         # Order: child READY must come BEFORE parent's final INIT→READY (steps 1-3 < 4-6)
         last_circuit_ready = max(
-            i for i, c in enumerate(mock_client.publish.call_args_list)
+            i
+            for i, c in enumerate(mock_client.publish.call_args_list)
             if "/circuit-1/$state" in c[0][0] and c[0][1] == DeviceState.READY
         )
         first_panel_init_after = next(
-            i for i, c in enumerate(mock_client.publish.call_args_list)
+            i
+            for i, c in enumerate(mock_client.publish.call_args_list)
             if "/panel-1/$state" in c[0][0] and c[0][1] == DeviceState.INIT and i > last_circuit_ready
         )
         assert last_circuit_ready < first_panel_init_after
@@ -814,10 +810,7 @@ class TestChildLifecycleProtocol:
         circuit.delete()
 
         # Child's $state, $description, etc. cleared (empty-string retained publishes)
-        cleared = [
-            c for c in mock_client.publish.call_args_list
-            if "/circuit-1/" in c[0][0] and c[0][1] == ""
-        ]
+        cleared = [c for c in mock_client.publish.call_args_list if "/circuit-1/" in c[0][0] and c[0][1] == ""]
         assert cleared, "expected retained-clear publishes for the deleted child"
         # Detached from parent
         assert circuit.parent() is None
@@ -852,8 +845,7 @@ class TestChildLifecycleProtocol:
         # Every device in the tree had its $state cleared
         for device_id in ("mid-1", "bess-1", "panel-1"):
             cleared_state = [
-                c for c in mock_client.publish.call_args_list
-                if f"/{device_id}/$state" in c[0][0] and c[0][1] == ""
+                c for c in mock_client.publish.call_args_list if f"/{device_id}/$state" in c[0][0] and c[0][1] == ""
             ]
             assert cleared_state, f"expected $state retained-clear for {device_id}"
 
@@ -872,9 +864,7 @@ class TestCrossDeviceTransitionCoordination:
 
         # No non-empty INIT/READY state publishes on bess-1 during cascade — only the
         # retained-clear (empty payload) we expect at the end.
-        bess_state_calls = [
-            c for c in mock_client.publish.call_args_list if "/bess-1/$state" in c[0][0]
-        ]
+        bess_state_calls = [c for c in mock_client.publish.call_args_list if "/bess-1/$state" in c[0][0]]
         non_clear_payloads = [c[0][1] for c in bess_state_calls if c[0][1] != ""]
         assert non_clear_payloads == [], (
             f"bess-1 should not flap INIT/READY while being deleted, got {non_clear_payloads}"
@@ -1310,9 +1300,7 @@ class TestDeviceRefreshTree:
             assert any(f"/{device_id}/$description" in t for t in topics), (
                 f"missing $description for {device_id} in {topics}"
             )
-            assert any(f"/{device_id}/$state" in t for t in topics), (
-                f"missing $state for {device_id} in {topics}"
-            )
+            assert any(f"/{device_id}/$state" in t for t in topics), f"missing $state for {device_id} in {topics}"
 
     def test_refresh_tree_three_levels(self, mock_paho):
         """S2 + S6: grandchildren also republish on reconnect."""

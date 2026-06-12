@@ -928,8 +928,7 @@ class Device:
         # Root vs. child invariants — mutually exclusive
         if parent is not None and mqtt_cfg:
             raise ValueError(
-                f"Device id={id}: cannot pass both parent= and mqtt_cfg=; "
-                "children share the root's MQTT connection"
+                f"Device id={id}: cannot pass both parent= and mqtt_cfg=; children share the root's MQTT connection"
             )
         if parent is not None and parent.root().mqttc is None:
             raise RuntimeError(
@@ -1310,9 +1309,7 @@ class Device:
         but skipping the set_state() call avoids the log noise too).
         """
         self._transition_depth += 1
-        logger.info(
-            f"reason=deviceBeginStateTransition,deviceId={self._id},depth={self._transition_depth}"
-        )
+        logger.info(f"reason=deviceBeginStateTransition,deviceId={self._id},depth={self._transition_depth}")
         if self._transition_depth == 1:
             self.set_state(DeviceState.INIT)
 
@@ -1325,9 +1322,7 @@ class Device:
         — letting the outermost scope batch everything into one INIT→READY
         cycle so controllers only resync once per logical change-set.
         """
-        logger.info(
-            f"reason=deviceEndStateTransition,deviceId={self._id},depth={self._transition_depth}"
-        )
+        logger.info(f"reason=deviceEndStateTransition,deviceId={self._id},depth={self._transition_depth}")
         if self._transition_depth == 1:
             self.publish_description()
             self.set_state(DeviceState.READY)
@@ -1347,8 +1342,7 @@ class Device:
         """
         if self._transition_depth > 0:
             logger.debug(
-                f"reason=deviceStructuralChangeSuppressed,deviceId={self._id},"
-                f"transitionDepth={self._transition_depth}"
+                f"reason=deviceStructuralChangeSuppressed,deviceId={self._id},transitionDepth={self._transition_depth}"
             )
             return
         if self._state != DeviceState.READY:

@@ -219,9 +219,7 @@ class TestEffectiveStateTable:
 
     def test_table_covers_all_states(self):
         for state in DeviceState:
-            assert state in HOMIE_EFFECTIVE_STATE_TABLE, (
-                f"DeviceState.{state.name} missing from precedence table"
-            )
+            assert state in HOMIE_EFFECTIVE_STATE_TABLE, f"DeviceState.{state.name} missing from precedence table"
 
     def test_only_ready_maps_to_none(self):
         """Per spec: only when root is READY do children's own states stand."""
@@ -294,11 +292,15 @@ class TestControllerEffectiveState:
         ctrl.start_discovery()
         self._discover(ctrl, "panel-1", "lost", {"homie": "5.0", "children": ["bess-1"]})
         self._discover(
-            ctrl, "bess-1", "ready",
+            ctrl,
+            "bess-1",
+            "ready",
             {"homie": "5.0", "root": "panel-1", "parent": "panel-1", "children": ["mid-1"]},
         )
         self._discover(
-            ctrl, "mid-1", "ready",
+            ctrl,
+            "mid-1",
+            "ready",
             {"homie": "5.0", "root": "panel-1", "parent": "bess-1"},
         )
 
@@ -312,7 +314,9 @@ class TestControllerEffectiveState:
         ctrl.start_discovery()
         # Discover child first with no parent description for the root
         self._discover(
-            ctrl, "bess-1", "ready",
+            ctrl,
+            "bess-1",
+            "ready",
             {"homie": "5.0", "root": "panel-1", "parent": "panel-1"},
         )
         # panel-1 not in registry yet
@@ -327,7 +331,9 @@ class TestControllerEffectiveState:
         self._discover(ctrl, "panel-1", "ready", {"homie": "5.0", "children": [f"c-{i}" for i in range(30)]})
         for i in range(30):
             self._discover(
-                ctrl, f"c-{i}", "ready",
+                ctrl,
+                f"c-{i}",
+                "ready",
                 {"homie": "5.0", "root": "panel-1", "parent": "panel-1"},
             )
         # Sanity: all ready
