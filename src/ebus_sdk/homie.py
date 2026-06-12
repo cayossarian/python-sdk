@@ -1544,6 +1544,45 @@ class DiscoveredDevice:
         """Get target value of a property"""
         return self.property_targets.get(node_id, {}).get(property_id)
 
+    @property
+    def root_id(self) -> str:
+        """
+        ID of the root device of this device's tree.
+
+        Per Homie 5: the `root` field is omitted on root devices and required
+        on non-roots. When absent, this device IS the root, so root_id = device_id.
+        """
+        if not self.description:
+            return self.device_id
+        return self.description.get("root", self.device_id)
+
+    @property
+    def parent_id(self) -> Optional[str]:
+        """
+        ID of the immediate parent, or None if this device is a root.
+        Reads description.parent — present only on non-root devices.
+        """
+        if not self.description:
+            return None
+        return self.description.get("parent")
+
+    @property
+    def children_ids(self) -> List[str]:
+        """
+        IDs of this device's immediate children from description.children.
+        Empty list if no description or no children. These IDs may or may not
+        themselves be discovered yet — use Controller.get_children() to get
+        the DiscoveredDevice objects that ARE discovered.
+        """
+        if not self.description:
+            return []
+        return list(self.description.get("children", []))
+
+    @property
+    def is_root(self) -> bool:
+        """True iff this device is the root of its tree (no parent)."""
+        return self.parent_id is None
+
     def get_nodes(self) -> List[str]:
         """Get list of node IDs from description"""
         if not self.description or "nodes" not in self.description:
@@ -1956,6 +1995,59 @@ class Controller:
     def get_all_devices(self) -> dict:
         """Get all discovered devices"""
         return self.devices.copy()
+
+    def get_root_devices(self) -> List[DiscoveredDevice]:
+        """
+        Return all discovered devices that are tree roots (parent_id is None).
+
+        Useful for traversal: walk each root, then descend via get_children().
+        """
+        return [d for d in self.devices.values() if d.is_root]
+
+    def get_root(self, device_id: str) -> Optional[DiscoveredDevice]:
+        """
+        Return the root DiscoveredDevice for the tree containing device_id.
+
+        Reads the device's description.root field (which on a non-root device
+        always points at the top of the tree per the Homie 5 spec). Returns
+        None if the device isn't discovered, or if the named root device
+        isn't (yet) in the controller's registry.
+        """
+        device = self.devices.get(device_id)
+        if device is None:
+            return None
+        return self.devices.get(device.root_id)
+
+    def get_children(self, device_id: str) -> List[DiscoveredDevice]:
+        """
+        Return discovered children of device_id (immediate, not descendants).
+
+        Children IDs come from the parent's description.children. A listed ID
+        that hasn't yet published its own $state is omitted — callers can
+        register a discovery callback to react when it arrives.
+        """
+        device = self.devices.get(device_id)
+        if device is None:
+            return []
+        return [self.devices[cid] for cid in device.children_ids if cid in self.devices]
+
+    def get_descendants(self, device_id: str) -> List[DiscoveredDevice]:
+        """
+        Return all discovered descendants of device_id in breadth-first order.
+        Does not include device_id itself.
+        """
+        out: List[DiscoveredDevice] = []
+        queue: List[str] = [device_id]
+        seen = {device_id}
+        while queue:
+            current = queue.pop(0)
+            for child in self.get_children(current):
+                if child.device_id in seen:
+                    continue
+                seen.add(child.device_id)
+                out.append(child)
+                queue.append(child.device_id)
+        return out
 
     def stop(self) -> None:
         """Stop the controller, release resources, and disconnect from broker"""

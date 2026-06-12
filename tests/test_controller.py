@@ -94,6 +94,123 @@ class TestDiscoveredDevice:
         assert dev.get_node_properties("missing") == {}
 
 
+class TestDiscoveredDeviceHierarchy:
+    """SDK-d1p: hierarchy fields on DiscoveredDevice."""
+
+    def test_root_no_description_returns_self(self):
+        dev = DiscoveredDevice("panel-1")
+        # Before description arrives, treat the device as its own root —
+        # we have no evidence otherwise.
+        assert dev.root_id == "panel-1"
+        assert dev.parent_id is None
+        assert dev.children_ids == []
+        assert dev.is_root is True
+
+    def test_root_device_description(self):
+        """A description without root/parent fields means this device is a root."""
+        dev = DiscoveredDevice("panel-1")
+        dev.update_description(json.dumps({"homie": "5.0", "children": ["bess-1", "evse-1"]}))
+        assert dev.root_id == "panel-1"
+        assert dev.parent_id is None
+        assert dev.children_ids == ["bess-1", "evse-1"]
+        assert dev.is_root is True
+
+    def test_child_device_description(self):
+        dev = DiscoveredDevice("bess-1")
+        dev.update_description(json.dumps({"homie": "5.0", "root": "panel-1", "parent": "panel-1"}))
+        assert dev.root_id == "panel-1"
+        assert dev.parent_id == "panel-1"
+        assert dev.children_ids == []
+        assert dev.is_root is False
+
+    def test_grandchild_distinguishes_root_from_parent(self):
+        """S2: grandchild's root walks to the top while parent stays direct."""
+        dev = DiscoveredDevice("mid-1")
+        dev.update_description(json.dumps({"homie": "5.0", "root": "panel-1", "parent": "bess-1"}))
+        assert dev.root_id == "panel-1"
+        assert dev.parent_id == "bess-1"
+
+
+class TestControllerHierarchyNavigation:
+    """SDK-d1p: Controller tree navigation API."""
+
+    @staticmethod
+    def _discover(ctrl, device_id, description=None):
+        """Push $state + (optional) $description into the controller."""
+        ctrl._on_state_message(
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/$state",
+            b"ready",
+        )
+        if description is not None:
+            ctrl._on_description_message(
+                device_id,
+                f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/$description",
+                json.dumps(description).encode(),
+            )
+
+    def test_get_root_devices(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        self._discover(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        self._discover(ctrl, "bess-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1"})
+        self._discover(ctrl, "standalone-1", {"homie": "5.0"})
+
+        roots = {d.device_id for d in ctrl.get_root_devices()}
+        assert roots == {"panel-1", "standalone-1"}
+
+    def test_get_root_for_child(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        self._discover(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        self._discover(ctrl, "bess-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1"})
+
+        assert ctrl.get_root("bess-1").device_id == "panel-1"
+        assert ctrl.get_root("panel-1").device_id == "panel-1"
+        assert ctrl.get_root("unknown") is None
+
+    def test_get_root_for_grandchild(self, mock_paho):
+        """S2: a 3-level tree's grandchild resolves to the top root."""
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        self._discover(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        self._discover(ctrl, "bess-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1", "children": ["mid-1"]})
+        self._discover(ctrl, "mid-1", {"homie": "5.0", "root": "panel-1", "parent": "bess-1"})
+
+        assert ctrl.get_root("mid-1").device_id == "panel-1"
+
+    def test_get_children_returns_discovered_only(self, mock_paho):
+        """If the parent's description lists a child that hasn't published yet, omit it."""
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        self._discover(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1", "evse-1"]})
+        self._discover(ctrl, "bess-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1"})
+        # evse-1 not yet discovered
+
+        children = {c.device_id for c in ctrl.get_children("panel-1")}
+        assert children == {"bess-1"}
+
+    def test_get_descendants_breadth_first(self, mock_paho):
+        """3-level tree: descendants of root are children + grandchildren."""
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        self._discover(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1", "evse-1"]})
+        self._discover(ctrl, "bess-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1", "children": ["mid-1"]})
+        self._discover(ctrl, "evse-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1"})
+        self._discover(ctrl, "mid-1", {"homie": "5.0", "root": "panel-1", "parent": "bess-1"})
+
+        descendants = ctrl.get_descendants("panel-1")
+        ids = [d.device_id for d in descendants]
+        # BFS: bess-1 and evse-1 (level 2) before mid-1 (level 3).
+        assert set(ids[:2]) == {"bess-1", "evse-1"}
+        assert ids[-1] == "mid-1"
+        assert len(ids) == 3
+
+    def test_get_children_unknown_device(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho)
+        assert ctrl.get_children("never-seen") == []
+        assert ctrl.get_descendants("never-seen") == []
+
+
 # ── Controller ───────────────────────────────────────────────────────────
 
 
