@@ -46,6 +46,30 @@ device.start_mqtt_client()
 temp.set_value(23.5)
 ```
 
+### Device Trees (parent / child)
+
+Build a tree of devices that share a single MQTT connection. The root device owns the connection (and the Last Will), every child borrows it via the `parent=` constructor arg, and `$description` `root` / `parent` / `children` fields are kept in sync automatically. The tree can be any depth.
+
+```python
+panel = Device('panel-1', type='energy.ebus.device.electrical-panel', mqtt_cfg={...})
+panel.start_mqtt_client()
+
+# Add 32 circuit children inside one state transition — the broker sees
+# exactly one INIT→READY cycle on the panel, not 32.
+with panel.state_transition():
+    for cid in commissioned_circuits:
+        Device(id=cid, type='energy.ebus.device.circuit', parent=panel)
+
+# Three-level tree: panel → BESS child → MID grandchild
+bess = Device(id='bess-1', type='...battery-storage', parent=panel)
+Device(id='mid-1', type='...metering', parent=bess)
+
+# Remove a child at runtime (runs the Homie remove-child protocol)
+panel.children()[0].delete()
+```
+
+Children may have children of their own. A single Last Will registered on the root marks the entire tree `lost` if the publisher process dies — controllers compute effective state per the Homie 5 precedence table (see [`HOMIE_EFFECTIVE_STATE_TABLE`](src/ebus_sdk/homie.py)).
+
 ### Controller Role
 
 Discover and monitor Homie devices:
@@ -65,32 +89,42 @@ controller.set_on_property_changed_callback(on_property_changed)
 controller.start_discovery()
 ```
 
+Controllers can also navigate device hierarchies and compute effective state:
+
+```python
+# Walk the tree
+roots = controller.get_root_devices()
+for root in roots:
+    for descendant in controller.get_descendants(root.device_id):
+        # When the root is lost/disconnected/sleeping/init, every descendant
+        # is effectively the same regardless of its own reported $state.
+        print(f'{descendant.device_id}: {controller.get_effective_state(descendant.device_id)}')
+```
+
 ## Module Structure
 
 ```
 src/ebus_sdk/
 ├── __init__.py     # Package exports
-├── homie.py        # Homie convention implementation
-├── mqtt.py         # MQTT client wrapper
-└── property.py     # Property abstractions
+├── homie.py        # Homie convention implementation (Device, Node, Property, Controller, ...)
+└── property.py     # Application-level property abstractions
 ```
+
+MQTT transport lives in the separate [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client) package; this SDK depends on it.
 
 ### homie.py
 
 Core Homie convention implementation:
 
-- **Device** - Represents a Homie device with nodes and properties
+- **Device** - Represents a Homie device; pass `parent=` to build a child in a tree
 - **Node** - Groups related properties within a device
 - **Property** - Individual data points (sensors, controls)
-- **Controller** - Discovers and monitors Homie devices on a broker
-- **DiscoveredDevice** - Represents a device found by the controller
+- **Controller** - Discovers and monitors Homie devices on a broker; navigates trees and computes effective state
+- **DiscoveredDevice** - Represents a device found by the controller; exposes `root_id`, `parent_id`, `children_ids`, `is_root`
 - **DeviceState** - Enum: `init`, `ready`, `disconnected`, `sleeping`, `lost`
+- **HOMIE_EFFECTIVE_STATE_TABLE** - Homie 5 state-precedence table used by `Controller.get_effective_state()`
 - **PropertyDatatype** - Enum: `STRING`, `INTEGER`, `FLOAT`, `BOOLEAN`, `ENUM`, `COLOR`, `DATETIME`, `DURATION`, `JSON`
 - **Unit** - Common units: `DEGREE_CELSIUS`, `PERCENT`, `WATT`, `KILOWATT_HOUR`, etc.
-
-### mqtt.py
-
-- **MqttClient** - Wrapper around paho-mqtt with automatic reconnection, TLS support, and subscription management
 
 ### property.py
 
@@ -109,6 +143,10 @@ See [`examples/README.md`](examples/README.md) for example scripts demonstrating
 
 - Python 3.10+
 - paho-mqtt >= 1.6.1
+
+## Releases
+
+See [CHANGELOG.md](CHANGELOG.md). 0.2.0 introduces parent/child device trees and contains breaking changes to the `Device` constructor — see the changelog entry before upgrading from 0.1.x.
 
 ## Contributing
 
