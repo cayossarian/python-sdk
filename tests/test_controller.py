@@ -354,7 +354,7 @@ class TestControllerEffectiveState:
 # ── Controller ───────────────────────────────────────────────────────────
 
 
-def _make_controller(mock_paho, device_id=None, auto_start=False):
+def _make_controller(mock_paho, device_id=None, auto_start=False, root_device_id=None):
     """Helper to create a Controller with mocked MQTT."""
     with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
         mock_client = MagicMock()
@@ -365,6 +365,7 @@ def _make_controller(mock_paho, device_id=None, auto_start=False):
             mqtt_cfg={"host": "localhost", "port": 1883},
             auto_start=auto_start,
             device_id=device_id,
+            root_device_id=root_device_id,
         )
         return ctrl, mock_client
 
@@ -802,3 +803,333 @@ class TestControllerQoS:
         for c in mock_client.subscribe.call_args_list:
             _, kwargs = c
             assert kwargs["qos"] == 1
+
+
+# ── Controller tree-rooted mode (SDK-o1h) ────────────────────────────────
+
+
+def _push_state(ctrl, device_id, state):
+    """Push a $state retained message into the controller."""
+    ctrl._on_state_message(
+        f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/$state",
+        state.encode() if isinstance(state, str) else state,
+    )
+
+
+def _push_description(ctrl, device_id, description):
+    """Push a $description retained message into the controller."""
+    ctrl._on_description_message(
+        device_id,
+        f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/$description",
+        json.dumps(description).encode(),
+    )
+
+
+def _filters_for(device_id):
+    """The four exact-device topic filters subscribed for one device."""
+    base = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}"
+    return {
+        f"{base}/$state",
+        f"{base}/$description",
+        f"{base}/+/+",
+        f"{base}/+/+/$target",
+    }
+
+
+class TestTreeRootedInit:
+    def test_mutually_exclusive_with_device_id(self, mock_paho):
+        with pytest.raises(ValueError):
+            _make_controller(mock_paho, device_id="panel-1", root_device_id="panel-1")
+
+    def test_root_device_id_stored(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho, root_device_id="panel-1")
+        assert ctrl.root_device_id == "panel-1"
+        assert ctrl.is_tree_rooted is True
+        assert ctrl.device_id is None
+
+    def test_wildcard_mode_not_tree_rooted(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho)
+        assert ctrl.is_tree_rooted is False
+
+    def test_single_device_mode_not_tree_rooted(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho, device_id="panel-1")
+        assert ctrl.is_tree_rooted is False
+
+
+class TestTreeRootedStartDiscovery:
+    def test_subscribes_four_root_filters(self, mock_paho):
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+
+        topics = {c[0][0] for c in mock_client.subscribe.call_args_list}
+        assert topics == _filters_for("panel-1")
+
+    def test_pre_creates_root_entry(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+
+        assert "panel-1" in ctrl.devices
+        assert ctrl.devices["panel-1"].state is None
+
+    def test_no_wildcard_subscription(self, mock_paho):
+        """Tree-rooted mode must not subscribe to the broker-wide +/$state."""
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+
+        wildcard = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/+/$state"
+        topics = [c[0][0] for c in mock_client.subscribe.call_args_list]
+        assert wildcard not in topics
+
+
+class TestTreeRootedBootstrap:
+    """Retained-state bootstrap: tree announces all-at-once on connect."""
+
+    def test_root_only_no_children(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        # Retained $description (no children) + retained $state=ready
+        _push_description(ctrl, "panel-1", {"homie": "5.0"})
+        _push_state(ctrl, "panel-1", "ready")
+
+        assert set(ctrl.devices.keys()) == {"panel-1"}
+
+    def test_root_with_children_subscribes_each(self, mock_paho):
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        # Pretend retained $description arrives first (matches MQTT typical
+        # delivery order on a fresh subscription), then $state=ready.
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1", "evse-1"]})
+        mock_client.subscribe.reset_mock()
+        _push_state(ctrl, "panel-1", "ready")
+
+        # init→ready edge → reconcile → subscribe to each child's 4 filters
+        topics = {c[0][0] for c in mock_client.subscribe.call_args_list}
+        assert _filters_for("bess-1") <= topics
+        assert _filters_for("evse-1") <= topics
+        assert "bess-1" in ctrl.devices
+        assert "evse-1" in ctrl.devices
+
+    def test_grandchild_cascade(self, mock_paho):
+        """3-level tree bootstraps from the root via cascading state-edges."""
+        ctrl, _ = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        # Root: parent of bess-1
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        # bess-1's retained state/desc arrive after subscription
+        _push_description(
+            ctrl,
+            "bess-1",
+            {
+                "homie": "5.0",
+                "root": "panel-1",
+                "parent": "panel-1",
+                "children": ["mid-1"],
+            },
+        )
+        _push_state(ctrl, "bess-1", "ready")
+        # mid-1's retained state/desc
+        _push_description(
+            ctrl,
+            "mid-1",
+            {
+                "homie": "5.0",
+                "root": "panel-1",
+                "parent": "bess-1",
+            },
+        )
+        _push_state(ctrl, "mid-1", "ready")
+
+        assert set(ctrl.devices.keys()) == {"panel-1", "bess-1", "mid-1"}
+
+    def test_discovery_callbacks_fire_per_descendant(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho, root_device_id="panel-1")
+        discovered = []
+        ctrl.set_on_device_discovered_callback(lambda d: discovered.append(d.device_id))
+        ctrl.start_discovery()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        _push_description(
+            ctrl,
+            "bess-1",
+            {
+                "homie": "5.0",
+                "root": "panel-1",
+                "parent": "panel-1",
+            },
+        )
+        _push_state(ctrl, "bess-1", "ready")
+
+        assert discovered == ["panel-1", "bess-1"]
+
+
+class TestTreeRootedStateGate:
+    """init→ready edge gates reconcile; mid-init updates are stashed."""
+
+    def test_init_state_does_not_reconcile(self, mock_paho):
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        # First message is init — no children should be subscribed
+        _push_state(ctrl, "panel-1", "init")
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        mock_client.subscribe.reset_mock()
+        # Another init refresh — still no reconcile
+        _push_state(ctrl, "panel-1", "init")
+
+        assert "bess-1" not in ctrl.devices
+        assert mock_client.subscribe.call_count == 0
+
+    def test_init_then_ready_reconciles(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        _push_state(ctrl, "panel-1", "init")
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+
+        assert "bess-1" in ctrl.devices
+
+    def test_ready_to_ready_does_not_reconcile(self, mock_paho):
+        """A retained $state=ready republish (no edge) must not re-walk."""
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        # bess-1's tree is now subscribed; reset to see whether the next
+        # ready→ready refresh triggers any subscription churn.
+        mock_client.subscribe.reset_mock()
+        _push_state(ctrl, "panel-1", "ready")
+
+        assert mock_client.subscribe.call_count == 0
+
+
+class TestTreeRootedDynamicAdd:
+    def test_mid_flight_child_addition(self, mock_paho):
+        """Parent re-enters init, gets new description with extra child,
+        returns to ready → new descendant is auto-subscribed."""
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        # Initial steady-state with one child
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        _push_description(
+            ctrl,
+            "bess-1",
+            {
+                "homie": "5.0",
+                "root": "panel-1",
+                "parent": "panel-1",
+            },
+        )
+        _push_state(ctrl, "bess-1", "ready")
+        mock_client.subscribe.reset_mock()
+
+        # Mid-flight: parent goes to init, new description includes evse-1
+        _push_state(ctrl, "panel-1", "init")
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1", "evse-1"]})
+        # No reconcile yet
+        assert "evse-1" not in ctrl.devices
+        # Parent returns to ready → reconcile fires
+        _push_state(ctrl, "panel-1", "ready")
+
+        assert "evse-1" in ctrl.devices
+        topics = {c[0][0] for c in mock_client.subscribe.call_args_list}
+        # evse-1's 4 filters subscribed; bess-1's were not re-subscribed
+        assert _filters_for("evse-1") <= topics
+        assert _filters_for("bess-1").isdisjoint(topics)
+
+
+class TestTreeRootedDynamicRemove:
+    def test_child_removal_unsubscribes_and_fires_callback(self, mock_paho):
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        removed = []
+        ctrl.set_on_device_removed_callback(lambda d: removed.append(d.device_id))
+        ctrl.start_discovery()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1", "evse-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        _push_description(ctrl, "bess-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1"})
+        _push_state(ctrl, "bess-1", "ready")
+        _push_description(ctrl, "evse-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1"})
+        _push_state(ctrl, "evse-1", "ready")
+
+        # Reset only AFTER full steady-state, so we see only the unsub for evse-1
+        mock_client.unsubscribe.reset_mock()
+
+        # Parent drops evse-1 mid-flight
+        _push_state(ctrl, "panel-1", "init")
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+
+        assert "evse-1" not in ctrl.devices
+        assert "bess-1" in ctrl.devices
+        assert removed == ["evse-1"]
+        # 4 unsubscribe calls for evse-1's four filters
+        unsub_topics = {c[0][0] for c in mock_client.unsubscribe.call_args_list}
+        assert unsub_topics == _filters_for("evse-1")
+
+    def test_grandchild_dropped_recursively(self, mock_paho):
+        """Removing a middle device drops its descendants too."""
+        ctrl, _ = _make_controller(mock_paho, root_device_id="panel-1")
+        removed = []
+        ctrl.set_on_device_removed_callback(lambda d: removed.append(d.device_id))
+        ctrl.start_discovery()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        _push_description(
+            ctrl,
+            "bess-1",
+            {
+                "homie": "5.0",
+                "root": "panel-1",
+                "parent": "panel-1",
+                "children": ["mid-1"],
+            },
+        )
+        _push_state(ctrl, "bess-1", "ready")
+        _push_description(
+            ctrl,
+            "mid-1",
+            {
+                "homie": "5.0",
+                "root": "panel-1",
+                "parent": "bess-1",
+            },
+        )
+        _push_state(ctrl, "mid-1", "ready")
+
+        # Parent drops bess-1 — mid-1 must go too
+        _push_state(ctrl, "panel-1", "init")
+        _push_description(ctrl, "panel-1", {"homie": "5.0"})
+        _push_state(ctrl, "panel-1", "ready")
+
+        assert "bess-1" not in ctrl.devices
+        assert "mid-1" not in ctrl.devices
+        # Leaves-first ordering: mid-1 fires before bess-1
+        assert removed == ["mid-1", "bess-1"]
+
+
+class TestTreeRootedReconnect:
+    def test_reconnect_resets_devices_and_rewalks(self, mock_paho):
+        """On reconnect: registry is reset; retained state re-cascades the tree."""
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        _push_description(ctrl, "bess-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1"})
+        _push_state(ctrl, "bess-1", "ready")
+        assert "bess-1" in ctrl.devices
+
+        # Simulate reconnect: paho re-subscribes our filters; controller
+        # resets its registry so the retained ready triggers init→ready.
+        ctrl._on_connect()
+
+        # bess-1 is gone from the in-memory registry but root entry exists
+        assert set(ctrl.devices.keys()) == {"panel-1"}
+        assert ctrl.devices["panel-1"].state is None
+
+        # Retained $state/$description re-arrive on the recovered subscriptions
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        _push_description(ctrl, "bess-1", {"homie": "5.0", "root": "panel-1", "parent": "panel-1"})
+        _push_state(ctrl, "bess-1", "ready")
+
+        assert set(ctrl.devices.keys()) == {"panel-1", "bess-1"}

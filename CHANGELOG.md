@@ -4,6 +4,17 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-13
+
+### Added
+
+- `Controller(root_device_id=<id>)` — third discovery mode, complementary to wildcard and single-device. Subscribes to the named root's four topic patterns, then auto-subscribes to each descendant as it's announced via the parent's `$description.children`. Subscription changes are gated on the parent's `$state` init→ready edge: a `$description` arriving while `$state=init` is stashed but not acted on, since per Homie 5 only `ready` confirms the description is current. Reconnect re-walks the tree from the root using paho-mqtt's subscription recovery + a wiped in-memory registry. Solves the SPAN G3P-23496 multi-panel scoping problem where wildcard mode would see every panel on the shared broker and single-device mode would see the panel root but none of its children. Closes SDK-o1h.
+- `Controller.is_tree_rooted` — boolean property, True when constructed with `root_device_id`.
+
+### Changed
+
+- Dependency floor: `ebus-mqtt-client>=0.1.6` (was `>=0.1.2`). The tree-rooted mode's recursive descendant teardown needs the `MqttClient.unsubscribe()` method introduced in upstream 0.1.6.
+
 ## [0.2.2] — 2026-06-12
 
 ### Fixed
@@ -60,7 +71,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.3.0
 [0.2.2]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.2
 [0.2.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.0

@@ -101,6 +101,28 @@ for root in roots:
         print(f'{descendant.device_id}: {controller.get_effective_state(descendant.device_id)}')
 ```
 
+Three controller discovery modes select what the controller listens for:
+
+```python
+# Wildcard (default) — every device on the broker
+Controller(mqtt_cfg=cfg)
+
+# Single-device — subscribe to exactly one device, no children, no wildcards
+Controller(mqtt_cfg=cfg, device_id='panel-1')
+
+# Tree-rooted — subscribe to a root and auto-subscribe to its descendants
+# as they're announced; subscription changes are gated on the parent's
+# $state init→ready edge per the Homie 5 spec.
+Controller(mqtt_cfg=cfg, root_device_id='panel-1')
+```
+
+Tree-rooted mode is the right pick for consumers that want exactly one
+device's tree on a multi-publisher broker — wildcard would re-introduce
+multi-panel scope creep at the application layer, and single-device would
+see the root and none of its children. As the publisher mutates the tree
+(`Device(parent=...)` to add, `child.delete()` to remove), descendants are
+subscribed or dropped on the parent's next init→ready transition.
+
 ## Module Structure
 
 ```

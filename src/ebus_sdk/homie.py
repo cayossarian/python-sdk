@@ -1704,20 +1704,40 @@ class Controller:
         homie_domain: str = EBUS_HOMIE_DOMAIN,
         auto_start: bool = False,
         device_id: Optional[str] = None,
+        root_device_id: Optional[str] = None,
         qos: int = EBUS_HOMIE_MQTT_QOS,
     ):
         """
         Initialize a Homie Controller
+
+        Three discovery modes are mutually exclusive:
+        - Wildcard (default): device_id=None, root_device_id=None — sees every
+          device on the broker by subscribing to {domain}/5/+/$state.
+        - Single-device: device_id=<id> — subscribes to exactly that device's
+          four topic patterns; no children, no wildcard in the device-id slot.
+        - Tree-rooted: root_device_id=<id> — starts at the named root, then
+          walks $description.children and subscribes to each descendant as it
+          announces. Subscription changes are gated on the parent's init→ready
+          state edge (per Homie 5: $state=ready is the trust signal).
 
         Args:
             mqtt_cfg: MQTT broker configuration (same format as Device class)
             homie_domain: Homie domain to monitor (default: 'ebus')
             auto_start: If True, automatically start discovery on init
             device_id: If set, subscribe only to this specific device (no wildcards)
+            root_device_id: If set, subscribe to this root and auto-subscribe to
+                its descendants as the tree is announced (SDK-o1h)
             qos: MQTT QoS level for all subscribe/publish operations (default: EBUS_HOMIE_MQTT_QOS)
         """
+        if device_id is not None and root_device_id is not None:
+            raise ValueError(
+                "device_id and root_device_id are mutually exclusive; "
+                "pick single-device mode (device_id) or tree-rooted mode (root_device_id)"
+            )
+
         self.homie_domain = homie_domain
         self.device_id = device_id
+        self.root_device_id = root_device_id
         self._qos = qos
         self._mqtt_cfg = mqtt_cfg
         self.mqttc = None
@@ -1735,6 +1755,11 @@ class Controller:
 
         if auto_start:
             self.start_discovery()
+
+    @property
+    def is_tree_rooted(self) -> bool:
+        """True if this controller was created in tree-rooted mode (SDK-o1h)."""
+        return self.root_device_id is not None
 
     def _connect_broker(self) -> None:
         """Connect to MQTT broker"""
@@ -1759,20 +1784,36 @@ class Controller:
         return self._qos
 
     def _on_connect(self) -> None:
-        """Called when controller connects to MQTT broker"""
+        """Called when controller connects to MQTT broker.
+
+        MqttClient re-subscribes its own sub_callbacks dict on reconnect, so
+        topic-level recovery is already handled. In tree-rooted mode, the
+        controller's own bookkeeping (devices dict, current children) is reset
+        here so the retained $state/$description that paho delivers on the
+        fresh subscriptions drives a clean re-walk of the tree from the root,
+        identical to first-connect.
+        """
         logger.info("reason=controllerOnConnect")
-        # Re-subscribe to all topics on reconnect
-        if self.devices:
-            for device_id in self.devices.keys():
-                self._subscribe_to_device(device_id)
+        if self.is_tree_rooted:
+            # Cold restart of tree-rooted bookkeeping. paho-mqtt's MqttClient
+            # has already re-subscribed our root's four filters; retained
+            # state/description will arrive momentarily and the state-edge
+            # handler will reconcile descendants from scratch. Wipe the
+            # in-memory device registry so the init→ready edge sees the
+            # transition (the previous state would otherwise short-circuit it).
+            self.devices = {}
+            device = DiscoveredDevice(self.root_device_id, self.homie_domain)
+            self.devices[self.root_device_id] = device
 
     def start_discovery(self, homie_domain: Optional[str] = None) -> None:
         """
         Start auto-discovery of Homie devices
 
-        When device_id is set, subscribes to exact topics for that single device
-        (no wildcard in the device-id position). Otherwise, subscribes to the
-        wildcard discovery topic pattern: {domain}/5/+/$state
+        Behavior depends on the constructor-selected mode:
+        - root_device_id: tree-rooted — subscribe to root, then auto-subscribe
+          to descendants on the root's init→ready edge (SDK-o1h).
+        - device_id: single-device — subscribe to exact topics for that device.
+        - neither: wildcard — subscribe to {domain}/5/+/$state.
 
         Args:
             homie_domain: Optional specific domain to monitor (default: uses instance domain)
@@ -1783,45 +1824,55 @@ class Controller:
 
         domain = homie_domain or self.homie_domain
 
-        if self.device_id:
+        if self.is_tree_rooted:
+            logger.info(f"reason=startDiscoveryTreeRooted,rootDeviceID={self.root_device_id}")
+            # Pre-create the root entry; descendants are added as they're
+            # discovered via the parent's $description.children
+            device = DiscoveredDevice(self.root_device_id, domain)
+            self.devices[self.root_device_id] = device
+            self._subscribe_device_topics(self.root_device_id)
+        elif self.device_id:
             # Single-device mode: subscribe to exact topics, no wildcard
             # in the device-id position
-            base = f"{domain}/{EBUS_HOMIE_VERSION_MAJOR}/{self.device_id}"
             logger.info(f"reason=startDiscoverySingleDevice,deviceID={self.device_id}")
-
             # Pre-create the DiscoveredDevice entry
             device = DiscoveredDevice(self.device_id, domain)
             self.devices[self.device_id] = device
-
-            # Subscribe to $state
-            self.mqttc.subscribe(
-                f"{base}/$state",
-                param=self._on_state_message,
-                qos=self._qos,
-            )
-            # Subscribe to $description
-            self.mqttc.subscribe(
-                f"{base}/$description",
-                param=partial(self._on_description_message, self.device_id),
-                qos=self._qos,
-            )
-            # Subscribe to all properties: {base}/{node_id}/{property_id}
-            self.mqttc.subscribe(
-                f"{base}/+/+",
-                param=partial(self._on_property_message, self.device_id),
-                qos=self._qos,
-            )
-            # Subscribe to all property targets
-            self.mqttc.subscribe(
-                f"{base}/+/+/$target",
-                param=partial(self._on_target_message, self.device_id),
-                qos=self._qos,
-            )
+            self._subscribe_device_topics(self.device_id)
         else:
             # Wildcard discovery mode (original behavior)
             discovery_topic = f"{domain}/{EBUS_HOMIE_VERSION_MAJOR}/+/$state"
             logger.info(f"reason=startDiscovery,topic={discovery_topic}")
             self.mqttc.subscribe(discovery_topic, param=self._on_state_message, qos=self._qos)
+
+    def _subscribe_device_topics(self, device_id: str) -> None:
+        """Subscribe to the four exact-device topic patterns for device_id.
+
+        Used by single-device mode, tree-rooted mode (for the root and each
+        discovered descendant). The wildcard $state subscription path uses a
+        different shape and bypasses this.
+        """
+        base = f"{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}"
+        self.mqttc.subscribe(
+            f"{base}/$state",
+            param=self._on_state_message,
+            qos=self._qos,
+        )
+        self.mqttc.subscribe(
+            f"{base}/$description",
+            param=partial(self._on_description_message, device_id),
+            qos=self._qos,
+        )
+        self.mqttc.subscribe(
+            f"{base}/+/+",
+            param=partial(self._on_property_message, device_id),
+            qos=self._qos,
+        )
+        self.mqttc.subscribe(
+            f"{base}/+/+/$target",
+            param=partial(self._on_target_message, device_id),
+            qos=self._qos,
+        )
 
     def _on_state_message(self, topic: str, payload: bytes) -> None:
         """
@@ -1854,11 +1905,12 @@ class Controller:
         # New or existing device
         if device_id not in self.devices:
             # New device discovered (wildcard mode only; single-device mode
-            # pre-creates the entry in start_discovery)
+            # and tree-rooted mode pre-create their entries in start_discovery)
             logger.info(
                 f"reason=deviceDiscovered,deviceID={device_id},state={payload_str},knownDevices={list(self.devices.keys())}"
             )
             device = DiscoveredDevice(device_id, homie_domain)
+            old_state = None
             device.update_state(payload_str)
             self.devices[device_id] = device
 
@@ -1868,10 +1920,13 @@ class Controller:
             if self._on_device_discovered:
                 self._on_device_discovered(device)
         elif self.devices[device_id].state is None:
-            # Pre-created entry (single-device mode): first $state message
+            # Pre-created entry (single-device or tree-rooted mode):
+            # first $state message
             device = self.devices[device_id]
+            old_state = None
             device.update_state(payload_str)
-            logger.info(f"reason=deviceDiscovered,deviceID={device_id},state={payload_str},mode=singleDevice")
+            mode = "treeRooted" if self.is_tree_rooted else "singleDevice"
+            logger.info(f"reason=deviceDiscovered,deviceID={device_id},state={payload_str},mode={mode}")
             if self._on_device_discovered:
                 self._on_device_discovered(device)
         else:
@@ -1892,8 +1947,22 @@ class Controller:
                 device.update_state(payload_str)
                 logger.debug(f"reason=deviceStateRefreshed,deviceID={device_id},state={payload_str}")
 
+        # Tree-rooted mode: any device transitioning INTO ready is the trust
+        # signal to act on its $description.children. Per Homie 5, only the
+        # init→ready edge guarantees a consistent description; mid-flight
+        # description updates while state=init are stashed but not acted on.
+        if self.is_tree_rooted and payload_str == DeviceState.READY.value and old_state != DeviceState.READY.value:
+            self._reconcile_descendants(device_id)
+
     def _subscribe_to_device(self, device_id: str) -> None:
-        """Subscribe to all topics for a discovered device"""
+        """Subscribe to all topics for a discovered device (wildcard-mode helper).
+
+        Wildcard discovery hears a device's $state via the {domain}/5/+/$state
+        subscription; once it knows the device exists, it needs three more
+        filters (description, properties, targets) to track everything else.
+        Tree-rooted and single-device modes don't go through here — they call
+        _subscribe_device_topics directly to get all four filters at once.
+        """
         if not self.mqttc:
             return
 
@@ -1922,6 +1991,73 @@ class Controller:
             param=partial(self._on_target_message, device_id),
             qos=self._qos,
         )
+
+    def _reconcile_descendants(self, device_id: str) -> None:
+        """Diff a device's announced children against what's subscribed (SDK-o1h).
+
+        Fired on the init→ready edge in tree-rooted mode. Added children get
+        full topic subscriptions (their own retained $state/$description then
+        cascade through this same handler, surfacing grandchildren). Removed
+        children are unsubscribed and dropped from the registry recursively.
+
+        The state-edge gate (in _on_state_message) guarantees we only act when
+        $state=ready confirms the description is current — never on a partial
+        view stashed during $state=init.
+        """
+        if not self.mqttc:
+            return
+        device = self.devices.get(device_id)
+        if device is None:
+            return
+
+        declared = set(device.children_ids)
+        current = {cid for cid, d in self.devices.items() if cid != device_id and d.parent_id == device_id}
+
+        added = declared - current
+        removed = current - declared
+
+        for child_id in added:
+            logger.info(f"reason=treeRootedAddDescendant,parentID={device_id},childID={child_id}")
+            # Pre-create child entry; its own retained $state/$description
+            # arrive via the new subscriptions and drive update + cascade.
+            if child_id not in self.devices:
+                self.devices[child_id] = DiscoveredDevice(child_id, self.homie_domain)
+            self._subscribe_device_topics(child_id)
+
+        for child_id in removed:
+            logger.info(f"reason=treeRootedRemoveDescendant,parentID={device_id},childID={child_id}")
+            self._unsubscribe_and_drop(child_id)
+
+    def _unsubscribe_and_drop(self, device_id: str) -> None:
+        """Recursively drop a descendant and all of its own descendants (SDK-o1h).
+
+        Unsubscribes the four topic filters, removes the entry from the
+        registry, and fires on_device_removed (leaves-first so callbacks see a
+        consistent view: when fired for a parent, its children are already
+        gone). No-op if the device isn't tracked.
+        """
+        if device_id not in self.devices:
+            return
+        # Snapshot before mutating: collect this device's transitive
+        # descendants by parent_id linkage; recurse leaves-first.
+        children = [cid for cid, d in self.devices.items() if cid != device_id and d.parent_id == device_id]
+        for child_id in children:
+            self._unsubscribe_and_drop(child_id)
+
+        device = self.devices.pop(device_id, None)
+        if device is None:
+            return
+
+        if self.mqttc:
+            base = f"{self.homie_domain}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}"
+            for suffix in ("$state", "$description", "+/+", "+/+/$target"):
+                self.mqttc.unsubscribe(f"{base}/{suffix}")
+
+        if self._on_device_removed:
+            try:
+                self._on_device_removed(device)
+            except Exception:
+                logger.exception(f"reason=onDeviceRemovedCallbackException,deviceID={device_id}")
 
     def _on_description_message(self, device_id: str, topic: str, payload: bytes) -> None:
         """Handle device $description messages"""
