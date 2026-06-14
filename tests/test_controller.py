@@ -1107,6 +1107,89 @@ class TestTreeRootedDynamicRemove:
         assert removed == ["mid-1", "bess-1"]
 
 
+class TestTreeRootedDescriptionRace:
+    """SDK-gsn: retained $state=ready may arrive before retained $description.
+
+    paho delivers retained messages in subscription order, and we subscribe
+    to $state before $description in _subscribe_device_topics. So on initial
+    connect to a broker holding both retained, the state-edge reconcile in
+    _on_state_message can fire while the device's description is still None,
+    seeing zero children and subscribing to nothing. The fix re-runs reconcile
+    from _on_description_message when the device is already ready.
+    """
+
+    def test_state_before_description_still_reconciles(self, mock_paho):
+        """Retained $state=ready arrives FIRST, then $description with children."""
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        # State arrives first — at this moment description is None, reconcile
+        # finds zero children and is effectively a no-op.
+        _push_state(ctrl, "panel-1", "ready")
+        assert "bess-1" not in ctrl.devices
+        mock_client.subscribe.reset_mock()
+
+        # Description arrives second — must trigger a fresh reconcile that
+        # sees the now-current children list.
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1", "evse-1"]})
+
+        assert "bess-1" in ctrl.devices
+        assert "evse-1" in ctrl.devices
+        topics = {c[0][0] for c in mock_client.subscribe.call_args_list}
+        assert _filters_for("bess-1") <= topics
+        assert _filters_for("evse-1") <= topics
+
+    def test_description_only_acts_when_ready(self, mock_paho):
+        """A $description arriving while $state=init must NOT reconcile."""
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        _push_state(ctrl, "panel-1", "init")
+        mock_client.subscribe.reset_mock()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+
+        # State is still init — description-driven reconcile must be gated
+        assert "bess-1" not in ctrl.devices
+        assert mock_client.subscribe.call_count == 0
+
+    def test_repeat_description_in_ready_is_idempotent(self, mock_paho):
+        """A second $description with unchanged children must not re-subscribe."""
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        # bess-1's tree is established — reset and re-deliver the same
+        # description (e.g. a controller resubscribe). No subscription churn.
+        mock_client.subscribe.reset_mock()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+
+        assert mock_client.subscribe.call_count == 0
+
+    def test_grandchild_race_via_intermediate(self, mock_paho):
+        """The race recurs at every level — bess-1's children list may also
+        arrive after its $state=ready. The same fix must cover descendants."""
+        ctrl, mock_client = _make_controller(mock_paho, root_device_id="panel-1")
+        ctrl.start_discovery()
+        _push_description(ctrl, "panel-1", {"homie": "5.0", "children": ["bess-1"]})
+        _push_state(ctrl, "panel-1", "ready")
+        # bess-1 announces ready first, description second
+        _push_state(ctrl, "bess-1", "ready")
+        assert "mid-1" not in ctrl.devices
+        mock_client.subscribe.reset_mock()
+        _push_description(
+            ctrl,
+            "bess-1",
+            {
+                "homie": "5.0",
+                "root": "panel-1",
+                "parent": "panel-1",
+                "children": ["mid-1"],
+            },
+        )
+
+        assert "mid-1" in ctrl.devices
+        topics = {c[0][0] for c in mock_client.subscribe.call_args_list}
+        assert _filters_for("mid-1") <= topics
+
+
 class TestTreeRootedReconnect:
     def test_reconnect_resets_devices_and_rewalks(self, mock_paho):
         """On reconnect: registry is reset; retained state re-cascades the tree."""

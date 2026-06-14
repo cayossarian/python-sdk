@@ -1742,6 +1742,13 @@ class Controller:
         self._mqtt_cfg = mqtt_cfg
         self.mqttc = None
         self.devices = {}  # {device_id: DiscoveredDevice}
+        # Tree-rooted mode: {parent_device_id: set_of_subscribed_child_ids}.
+        # Authoritative record of what we've subscribed for under each parent,
+        # independent of any child's own description (which may not have
+        # arrived yet). Reconcile diffs against this rather than walking
+        # parent_id linkages so a pre-created-but-not-yet-described child
+        # doesn't look "missing" and get re-subscribed every reconcile.
+        self._subscribed_children: dict = {}
 
         # Callbacks
         self._on_device_discovered = None
@@ -1802,6 +1809,7 @@ class Controller:
             # in-memory device registry so the init→ready edge sees the
             # transition (the previous state would otherwise short-circuit it).
             self.devices = {}
+            self._subscribed_children = {}
             device = DiscoveredDevice(self.root_device_id, self.homie_domain)
             self.devices[self.root_device_id] = device
 
@@ -2011,7 +2019,7 @@ class Controller:
             return
 
         declared = set(device.children_ids)
-        current = {cid for cid, d in self.devices.items() if cid != device_id and d.parent_id == device_id}
+        current = set(self._subscribed_children.get(device_id, set()))
 
         added = declared - current
         removed = current - declared
@@ -2022,6 +2030,7 @@ class Controller:
             # arrive via the new subscriptions and drive update + cascade.
             if child_id not in self.devices:
                 self.devices[child_id] = DiscoveredDevice(child_id, self.homie_domain)
+            self._subscribed_children.setdefault(device_id, set()).add(child_id)
             self._subscribe_device_topics(child_id)
 
         for child_id in removed:
@@ -2039,10 +2048,18 @@ class Controller:
         if device_id not in self.devices:
             return
         # Snapshot before mutating: collect this device's transitive
-        # descendants by parent_id linkage; recurse leaves-first.
-        children = [cid for cid, d in self.devices.items() if cid != device_id and d.parent_id == device_id]
+        # descendants from our subscription registry (the authoritative record
+        # of what we subscribed for; doesn't depend on the child's own
+        # description having arrived). Recurse leaves-first.
+        children = list(self._subscribed_children.get(device_id, set()))
         for child_id in children:
             self._unsubscribe_and_drop(child_id)
+
+        # This device is no longer a parent in our tree
+        self._subscribed_children.pop(device_id, None)
+        # Remove this device from any parent's subscribed-children set
+        for siblings in self._subscribed_children.values():
+            siblings.discard(device_id)
 
         device = self.devices.pop(device_id, None)
         if device is None:
@@ -2071,6 +2088,17 @@ class Controller:
         logger.info(f"reason=descriptionReceived,deviceID={device_id}")
         if self._on_description_received:
             self._on_description_received(device)
+
+        # SDK-gsn: on initial connect with retained state+description, $state
+        # often arrives before $description (we subscribe to $state first, and
+        # paho delivers in subscription order). The state-edge reconcile in
+        # _on_state_message then sees an empty children list and subscribes to
+        # nothing. Catch the late-arriving description here: when the device
+        # is already ready, run reconcile against the now-current description.
+        # Idempotent — a no-op when children are already subscribed, so safe
+        # in the design-intended order (description-then-state) too.
+        if self.is_tree_rooted and device.state == DeviceState.READY.value:
+            self._reconcile_descendants(device_id)
 
     def _on_property_message(self, device_id: str, topic: str, payload: bytes) -> None:
         """
@@ -2296,6 +2324,7 @@ class Controller:
             self.mqttc = None
         # Release DiscoveredDevice objects and their property dicts
         self.devices.clear()
+        self._subscribed_children.clear()
         # Clear callback references to break reference cycles
         self._on_device_discovered = None
         self._on_device_state_changed = None

@@ -13,7 +13,7 @@ from setuptools import setup
 
 setup(
     name="ebus-sdk",
-    version="0.3.0",
+    version="0.3.1",
     package_dir={"": "src"},
     packages=["ebus_sdk"],
 )

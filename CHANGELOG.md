@@ -4,6 +4,13 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-14
+
+### Fixed
+
+- Tree-rooted Controller: on initial connect to a broker holding retained `$state=ready` and retained `$description`, the state message often arrives before the description (paho delivers retained messages in subscription order and we subscribe to `$state` first). The state-edge reconcile would then see an empty `children` list and subscribe to nothing; the late-arriving description was stashed but never triggered another reconcile. `_on_description_message` now also fires `_reconcile_descendants` when the device is already at `$state=ready` — idempotent, so the design-intended description-then-state ordering still works. Caught during span-hass Phase 4 live verification against a real SPAN G2 panel where the panel root discovered but no descendants did. Closes SDK-gsn.
+- Tree-rooted Controller: `_reconcile_descendants` now diffs declared children against an internal `_subscribed_children` registry rather than walking each child's own `parent_id` (which is `None` until that child's `$description` arrives). A pre-created-but-not-yet-described child no longer looks "missing" on a subsequent reconcile, so repeat descriptions in `$state=ready` are now true no-ops.
+
 ## [0.3.0] — 2026-06-13
 
 ### Added
@@ -71,7 +78,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.3.1
 [0.3.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.3.0
 [0.2.2]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.2
 [0.2.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.1
