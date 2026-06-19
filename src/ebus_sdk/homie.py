@@ -525,10 +525,22 @@ class Property:
             return True
         topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{device_id}/{node_id}/{self._id}"
         if self._value is None:
+            # Value was cleared after having been published. Emit the empty
+            # retained message so the prior retained value is retracted from the
+            # broker rather than silently left behind (a reconnecting subscriber
+            # would otherwise read the stale value). Reaching here implies
+            # _ever_published is True and _skip_initial_publish is False — the
+            # earlier guard returns for the never-published / skip-initial case.
+            #
+            # NOTE: this clears the topic (empty MQTT payload). It does NOT
+            # represent an actual empty-string *value*, which the Homie 5
+            # convention encodes as a 1-character 0x00 payload — see the module
+            # header "empty string values" note; that encoding is not yet
+            # implemented (SDK-ef1 / known limitation).
             logger.debug(
-                f"reason=propertyPublishValueIsNone,deviceID={device_id},nodeID={node_id},propertyID={self._id}"
+                f"reason=propertyPublishValueIsNoneClearing,deviceID={device_id},nodeID={node_id},propertyID={self._id}"
             )
-            return False
+            return self.clear_value()
         try:
             value = self.coerced_value()
             if value is None:
@@ -547,8 +559,22 @@ class Property:
 
     def clear_value(self) -> bool:
         """
-        Clear the property's value by publishing null/empty to its topic
-        Returns True on success, else False
+        Clear (retract) the property's retained value on the broker.
+
+        Publishes a zero-length payload with retain=True, which MQTT treats as
+        a "delete" instruction for the retained message on the topic — so a
+        subscriber that connects afterwards receives no retained value rather
+        than a stale one. This is the empty-retained convention referenced in
+        the module header; it is also how ``set_value(None)`` clears a
+        previously-published property (see ``publish_value``).
+
+        This clears the topic; it does NOT publish an actual empty-string
+        *value* (which the Homie 5 convention encodes as a 1-character 0x00
+        payload — not yet implemented, see the module header note).
+
+        No-ops (returns True) if the property was never published, to avoid
+        creating a phantom retained-empty topic. Returns True on success, else
+        False.
         """
         # FIX: Don't clear if we never published a value
         # This prevents creating phantom topics during cleanup

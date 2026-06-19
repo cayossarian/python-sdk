@@ -377,6 +377,51 @@ class TestHomiePropertyPublish:
         assert prop.value() == 99.0
         mock_client.publish.assert_called_once()
 
+    def test_publish_none_after_published_clears_retained(self):
+        # Regression for SDK-ef1 / GH #2: once a value has been published,
+        # setting it to None must retract the retained message (empty payload,
+        # retain=True) rather than silently leaving the stale value behind.
+        mock_client = _mock_mqtt_client()
+        prop = _make_wired_property(mock_client)
+        prop.publish_value()  # mark as published
+        mock_client.publish.reset_mock()
+
+        prop._value = None
+        result = prop.publish_value()
+
+        assert result is True
+        assert prop.was_ever_published() is False
+        call_args = mock_client.publish.call_args
+        assert call_args[0][1] == ""  # empty payload clears the retained topic
+        assert call_args[1]["retain"] is True
+
+    def test_set_value_none_after_published_clears_retained(self):
+        # The publisher-facing path: set_value(None) must clear, mirroring what
+        # the adapter/bridge pattern relies on when an app property goes None.
+        mock_client = _mock_mqtt_client()
+        prop = _make_wired_property(mock_client)
+        prop.set_value(99.0)
+        mock_client.publish.reset_mock()
+
+        result = prop.set_value(None)
+
+        assert result is True
+        call_args = mock_client.publish.call_args
+        assert call_args[0][1] == ""
+        assert call_args[1]["retain"] is True
+
+    def test_publish_none_never_published_does_not_clear(self):
+        # The never-published None case must remain a silent no-op (no phantom
+        # retained-empty topic).
+        mock_client = _mock_mqtt_client()
+        prop = _make_wired_property(mock_client, value=None)
+
+        result = prop.publish_value()
+
+        assert result is True
+        mock_client.publish.assert_not_called()
+        assert prop.was_ever_published() is False
+
     def test_publish_boolean_coerced(self):
         mock_client = _mock_mqtt_client()
         prop = _make_wired_property(mock_client, value=True, datatype=PropertyDatatype.BOOLEAN, id="active")
