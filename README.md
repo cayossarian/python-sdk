@@ -46,6 +46,18 @@ device.start_mqtt_client()
 temp.set_value(23.5)
 ```
 
+#### Clearing a value vs. an empty-string value
+
+Homie 5 distinguishes two things that both look "empty" on the wire, and the SDK handles each automatically:
+
+- **Clearing (retracting) a retained value** — set the property to `None`. Once it has been published, this emits a zero-length `retain=True` payload, which MQTT/Homie treats as "delete the retained topic", so a subscriber that connects later sees no stale value. (`clear_value()` does the same explicitly; `Node.delete_property()` clears on removal.) A `None` that was never published is a silent no-op — no phantom topic is created.
+- **An actual empty-string value** — set a string property to `""`. This is published as a single null byte (`0x00`), the Homie 5 encoding that keeps `""` distinct from a topic-clear. Inbound `0x00` payloads are decoded back to `""` on the controller and on `/set`. Helpers `encode_empty_string()` / `decode_empty_string()` and the constant `HOMIE_EMPTY_STRING_PAYLOAD` are exported for consumers that need them directly.
+
+```python
+temp.set_value(None)     # retracts the retained topic (subscribers see nothing)
+label.set_value("")      # publishes an empty-string VALUE (0x00 on the wire)
+```
+
 ### Device Trees (parent / child)
 
 Build a tree of devices that share a single MQTT connection. The root device owns the connection (and the Last Will), every child borrows it via the `parent=` constructor arg, and `$description` `root` / `parent` / `children` fields are kept in sync automatically. The tree can be any depth.
@@ -69,6 +81,8 @@ panel.children()[0].delete()
 ```
 
 Children may have children of their own. A single Last Will registered on the root marks the entire tree `lost` if the publisher process dies — controllers compute effective state per the Homie 5 precedence table (see [`HOMIE_EFFECTIVE_STATE_TABLE`](src/ebus_sdk/homie.py)).
+
+`$description` republishes are minimized: structural changes made inside one `state_transition()` collapse to a single consolidated publish at exit (not one per `add_node`), and `publish_description()` is a no-op when the description content (ignoring its `version` timestamp) is unchanged — so a `state_transition()` that changes nothing structural does not re-emit the (potentially multi-KB) `$description`. A reconnect always republishes regardless, to restore retained state. Note this suppresses the redundant `$description` payload, not the `$state` `init`→`ready` edge of an empty transition.
 
 ### Controller Role
 

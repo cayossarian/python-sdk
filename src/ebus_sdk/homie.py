@@ -38,6 +38,7 @@ This is the initial version, there are things to add in the future (as needed):
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -1057,6 +1058,11 @@ class Device:
         # entry/exit publishes INIT/READY). Init→ready transitions force every controller
         # in the wild to resync, so emitting only the minimum is a correctness concern.
         self._transition_depth = 0
+        # SDK-n83: hash of the last $description we actually published, with the
+        # always-fresh `version` timestamp removed. publish_description() uses it
+        # to skip a republish whose content has not changed (saves the ~KB
+        # payload and the gratuitous INIT→READY flap). Maintained in publish().
+        self._last_description_content_hash = None
         # Distinguish between initial and subsequent connections to broker
         self.initial_broker_connection = True
         if parent is None:
@@ -1427,9 +1433,14 @@ class Device:
         """
         logger.info(f"reason=deviceEndStateTransition,deviceId={self._id},depth={self._transition_depth}")
         if self._transition_depth == 1:
+            # Leave the transition scope BEFORE the consolidated publish so that
+            # final, intended $description is not suppressed by the in-transition
+            # defer guard in publish_description() (SDK-9ps).
+            self._transition_depth = 0
             self.publish_description()
             self.set_state(DeviceState.READY)
-        self._transition_depth -= 1
+        else:
+            self._transition_depth -= 1
 
     def _notify_structural_change(self) -> None:
         """
@@ -1520,14 +1531,8 @@ class Device:
                     payload = self._state
             elif attribute == "$description":
                 topic = base_topic + "$description"
-                if value:
-                    payload = json.dumps(value)
-                else:
-                    description = self.description()
-                    if description:
-                        payload = json.dumps(description)
-                    else:
-                        payload = None
+                description = value if value else self.description()
+                payload = json.dumps(description) if description else None
             elif attribute == "$alert":
                 topic = base_topic + "$alert"
                 if value:
@@ -1537,6 +1542,13 @@ class Device:
                     return
             if payload:
                 mqttc.publish(topic, payload, retain=True, qos=self._qos)
+                if attribute == "$description":
+                    # SDK-n83: remember what we just put on the wire (sans the
+                    # version timestamp) so a later unchanged republish no-ops.
+                    # Updated here — the single $description chokepoint — so every
+                    # caller (publish_description, _notify_structural_change,
+                    # reconnect) keeps the hash current.
+                    self._last_description_content_hash = self._description_content_hash(description)
         except Exception as e:
             logger.exception(f"reason=devicePublishException,id={self._id},attribute={attribute},value={value},e={e}")
 
@@ -1550,7 +1562,39 @@ class Device:
         else:
             self.publish("$state", value=self._state)
 
+    @staticmethod
+    def _description_content_hash(description: dict) -> str:
+        """
+        SHA-256 of a $description dict with the always-fresh `version` timestamp
+        removed, so two structurally-identical descriptions hash equal even
+        though description() stamps a new version on every call.
+        """
+        content = {k: v for k, v in description.items() if k != "version"}
+        return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
+
     def publish_description(self, republish: bool = False) -> None:
+        # SDK-9ps: while a state_transition() is open, defer interim $description
+        # publishes to the single consolidated publish at _end_state_transition().
+        # Adding N nodes inside one transition then puts 1 description on the wire,
+        # not N+1. A forced republish (reconnect / not-yet-READY) is exempt — it
+        # must reach the broker now. (_end_state_transition leaves the transition
+        # scope before its own call so that consolidated publish isn't deferred.)
+        if self._transition_depth > 0 and not republish:
+            logger.debug(
+                f"reason=publishDescriptionDeferredInTransition,deviceId={self._id},depth={self._transition_depth}"
+            )
+            return
+
+        # SDK-n83: defensive no-op when the description content (ignoring the
+        # always-fresh `version` timestamp) is byte-identical to what we last
+        # published — avoids the redundant ~KB republish and the gratuitous
+        # INIT→READY flap that forces every subscriber to resync. A forced
+        # republish is exempt so reconnect always restores the retained topic.
+        if not republish:
+            if self._description_content_hash(self.description()) == self._last_description_content_hash:
+                logger.debug(f"reason=publishDescriptionUnchanged,deviceId={self._id}")
+                return
+
         if republish:
             self.publish("$description")
         else:

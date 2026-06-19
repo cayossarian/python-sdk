@@ -1119,6 +1119,94 @@ class TestCrossDeviceTransitionCoordination:
         assert panel_states == [DeviceState.INIT, DeviceState.READY]
 
 
+class TestDescriptionPublishSuppression:
+    """SDK-9ps (defer interim publishes in a transition) + SDK-n83 (no-op when
+    the description content, ignoring the version timestamp, is unchanged)."""
+
+    def test_adds_inside_transition_publish_one_description(self, mock_paho):
+        # SDK-9ps: N add_node calls inside one transition -> exactly 1 $description
+        # on the wire (the consolidated publish at exit), not N+1.
+        device, mock_client = _make_device(mock_paho, device_id="dev-1")
+        mock_client.publish.reset_mock()
+
+        with device.state_transition():
+            for i in range(5):
+                device.add_node(device.new_node(f"node-{i}"))
+
+        assert _description_publishes_for(mock_client, "dev-1") == 1
+        # ...and that single publish reflects all 5 nodes.
+        desc_payloads = [c[0][1] for c in mock_client.publish.call_args_list if "/dev-1/$description" in c[0][0]]
+        final = json.loads(desc_payloads[-1])
+        assert set(final["nodes"].keys()) == {f"node-{i}" for i in range(5)}
+
+    def test_noop_transitions_suppress_description_republish(self, mock_paho):
+        # SDK-n83: transitions that change nothing structural don't republish the
+        # (potentially large) $description.
+        device, mock_client = _make_device(mock_paho, device_id="dev-1")
+        device.add_node(device.new_node("core"))
+        mock_client.publish.reset_mock()
+
+        for _ in range(10):
+            with device.state_transition():
+                pass
+
+        assert _description_publishes_for(mock_client, "dev-1") == 0
+
+    def test_changed_publishes_then_unchanged_suppressed(self, mock_paho):
+        # A real structural change publishes once; an immediately-following no-op
+        # transition publishes zero.
+        device, mock_client = _make_device(mock_paho, device_id="dev-1")
+        mock_client.publish.reset_mock()
+
+        with device.state_transition():
+            device.add_node(device.new_node("core"))
+        assert _description_publishes_for(mock_client, "dev-1") == 1
+
+        mock_client.publish.reset_mock()
+        with device.state_transition():
+            pass
+        assert _description_publishes_for(mock_client, "dev-1") == 0
+
+    def test_distinct_changes_each_publish(self, mock_paho):
+        # Two transitions that each make a *different* structural change each
+        # publish — the no-op suppression must not swallow a genuine change.
+        device, mock_client = _make_device(mock_paho, device_id="dev-1")
+        mock_client.publish.reset_mock()
+
+        with device.state_transition():
+            device.add_node(device.new_node("a"))
+        with device.state_transition():
+            device.add_node(device.new_node("b"))
+
+        assert _description_publishes_for(mock_client, "dev-1") == 2
+
+    def test_reconnect_republishes_even_when_unchanged(self, mock_paho):
+        # republish=True (reconnect cascade) must restore the retained $description
+        # regardless of the content-hash no-op — the broker may have lost it.
+        device, mock_client = _make_device(mock_paho, device_id="dev-1")
+        device.add_node(device.new_node("core"))
+        device.initial_broker_connection = False
+        mock_client.publish.reset_mock()
+
+        device.on_connect()
+
+        assert _description_publishes_for(mock_client, "dev-1") >= 1
+
+    def test_empty_transition_still_flaps_state(self, mock_paho):
+        # Documents intentional scope: the $state INIT->READY flap is NOT
+        # suppressed (that stays the adapter's job per SDK-n83 "Layer 1"); only
+        # the redundant $description payload is.
+        device, mock_client = _make_device(mock_paho, device_id="dev-1")
+        device.add_node(device.new_node("core"))
+        mock_client.publish.reset_mock()
+
+        with device.state_transition():
+            pass
+
+        assert _state_payloads_for(mock_client, "dev-1") == [DeviceState.INIT, DeviceState.READY]
+        assert _description_publishes_for(mock_client, "dev-1") == 0
+
+
 class TestDeviceNodes:
     def test_new_node(self, mock_paho):
         device, _ = _make_device(mock_paho)
