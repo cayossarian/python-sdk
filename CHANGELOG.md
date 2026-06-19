@@ -4,6 +4,21 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-19
+
+### Added
+
+- Homie 5 empty-string **value** encoding. A property whose value is the empty string `""` is now published as a 1-character payload containing a single null byte (`0x00`), and an inbound `0x00` payload is decoded back to `""`. This is the Homie 5 convention that distinguishes an actual empty-string value from a zero-length payload (which MQTT/Homie treats as "clear the retained topic" — see the retained-clear fix below). Encoding is applied on publish (`Property.publish_value()` for reported values, `Controller.set_property()` for outbound `/set`) and decoding on receive (`Controller._on_property_message()` / `_on_target_message()`, `Property._settable_callback()` for inbound `/set`). New exported helpers `encode_empty_string()` / `decode_empty_string()` and the constant `HOMIE_EMPTY_STRING_PAYLOAD`. The convention provides no way to represent a genuine 1-character `0x00` string value; a device needing that must escape it at the application level. Outbound `$target` encoding (`publish_target_value()`) remains a stub. Closes SDK-kvd.
+
+### Fixed
+
+- Publishers can now clear a **retained** property value. Setting a property to `None` after it has been published emits the empty (zero-length) `retain=True` payload that retracts the value from the broker, instead of the previous silent no-op that left the stale retained value in place (a reconnecting subscriber would read the obsolete value). The never-published-`None` case stays a silent no-op, so no phantom retained-empty topic is created. This fixes the documented adapter/bridge pattern with no consumer change — an application property going `None` now retracts its mirrored Homie topic. The `clear_value()` docstring documents the empty-retained convention. Closes SDK-ef1 / GitHub #2.
+
+### Changed
+
+- `Device.publish_description()` is now a no-op when the description content — ignoring the always-fresh `version` timestamp — is byte-identical to what was last published. This saves the redundant (often multi-KB) `$description` republish and the gratuitous `$state` `init`→`ready` flap it would otherwise drive on subscribers. A forced republish (`republish=True`, used by the reconnect cascade and not-yet-`ready` devices) is exempt and always publishes, so reconnect still restores the retained `$description`. Scope note: this suppresses the redundant `$description` payload, **not** the `$state` `init`→`ready` flap of an otherwise-empty `state_transition()` — the eager-`init` publish is preserved (the documented in-transition state contract), so a no-op transition still emits `init`→`ready` on `$state` while emitting no `$description`. Closes SDK-n83.
+- Interim `$description` publishes are deferred while a `state_transition()` is open. Adding N nodes inside one transition now puts exactly one `$description` on the wire — the consolidated publish at transition exit — rather than N+1. The final published description is byte-identical to before; only the redundant interim publishes (immediately superseded by the exit publish) are removed. Closes SDK-9ps.
+
 ## [0.3.1] — 2026-06-14
 
 ### Fixed
@@ -78,7 +93,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.4.0
 [0.3.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.3.1
 [0.3.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.3.0
 [0.2.2]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.2
