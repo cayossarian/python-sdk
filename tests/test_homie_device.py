@@ -16,6 +16,9 @@ from ebus_sdk.homie import (
     datatype_from_type,
     ebus_cfg_add_auth,
     sanitize_homie_id,
+    encode_empty_string,
+    decode_empty_string,
+    HOMIE_EMPTY_STRING_PAYLOAD,
     EBUS_HOMIE_DOMAIN,
     EBUS_HOMIE_MQTT_QOS,
     EBUS_HOMIE_VERSION_MAJOR,
@@ -527,6 +530,54 @@ class TestHomiePropertySettableCallback:
         topic = "wrong/5/dev1/node1/mode/set"
         prop._settable_callback(topic, b"manual")
         cb.assert_not_called()
+
+
+class TestEmptyStringEncoding:
+    # Homie 5: an empty-string *value* is carried as a single 0x00 byte, to
+    # distinguish it from a zero-length payload (which clears the retained topic).
+
+    def test_encode_empty_string(self):
+        assert encode_empty_string("") == HOMIE_EMPTY_STRING_PAYLOAD
+        assert encode_empty_string("") == "\x00"
+
+    def test_encode_non_empty_passthrough(self):
+        assert encode_empty_string("hello") == "hello"
+        assert encode_empty_string("0") == "0"
+
+    def test_decode_empty_string(self):
+        assert decode_empty_string(HOMIE_EMPTY_STRING_PAYLOAD) == ""
+        assert decode_empty_string("\x00") == ""
+
+    def test_decode_non_empty_passthrough(self):
+        assert decode_empty_string("hello") == "hello"
+
+    def test_encode_decode_roundtrip(self):
+        for v in ["", "hello", "0", "false", "multi word"]:
+            assert decode_empty_string(encode_empty_string(v)) == v
+
+    def test_publish_empty_string_value_encodes_null_byte(self):
+        # A string property whose value is "" must publish 0x00, not a
+        # zero-length payload (which the broker would treat as a clear).
+        mock_client = _mock_mqtt_client()
+        prop = _make_wired_property(mock_client, id="label", value="", datatype=PropertyDatatype.STRING)
+
+        result = prop.publish_value()
+
+        assert result is True
+        call_args = mock_client.publish.call_args
+        assert call_args[0][1] == "\x00"
+        assert call_args[1]["retain"] is True  # default retained
+
+    def test_settable_callback_decodes_null_byte_to_empty_string(self):
+        cb = MagicMock()
+        mock_client = _mock_mqtt_client()
+        prop = _make_wired_property(
+            mock_client, id="mode", settable=True, set_callback=cb, datatype=PropertyDatatype.STRING
+        )
+
+        topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/dev1/node1/mode/set"
+        prop._settable_callback(topic, b"\x00")
+        cb.assert_called_once_with("")
 
 
 class TestHomiePropertySetSubscribe:

@@ -611,6 +611,45 @@ class TestControllerPropertyMessages:
         dev = ctrl.devices["panel-1"]
         assert dev.get_property_target("breaker", "state") == "CLOSED"
 
+    def test_property_message_decodes_null_byte_to_empty_string(self, mock_paho):
+        # Homie 5: a single 0x00 byte payload is an empty-string value, not a
+        # literal "\x00" string.
+        ctrl, _ = _make_controller(mock_paho)
+        changes = []
+        ctrl.set_on_property_changed_callback(
+            lambda dev_id, node, prop, val, old: changes.append((dev_id, node, prop, val, old))
+        )
+        ctrl.start_discovery()
+        ctrl._on_state_message(
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/$state",
+            b"ready",
+        )
+
+        ctrl._on_property_message(
+            "panel-1",
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/info/label",
+            b"\x00",
+        )
+
+        assert ctrl.devices["panel-1"].get_property("info", "label") == ""
+        assert changes[-1] == ("panel-1", "info", "label", "", None)
+
+    def test_target_message_decodes_null_byte_to_empty_string(self, mock_paho):
+        ctrl, _ = _make_controller(mock_paho)
+        ctrl.start_discovery()
+        ctrl._on_state_message(
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/$state",
+            b"ready",
+        )
+
+        ctrl._on_target_message(
+            "panel-1",
+            f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/info/label/$target",
+            b"\x00",
+        )
+
+        assert ctrl.devices["panel-1"].get_property_target("info", "label") == ""
+
 
 class TestControllerSetProperty:
     def test_set_property_publishes(self, mock_paho):
@@ -621,6 +660,15 @@ class TestControllerSetProperty:
         assert result is True
         expected_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/breaker/state/set"
         mock_client.publish.assert_called_once_with(expected_topic, "CLOSED", qos=EBUS_HOMIE_MQTT_QOS, retain=False)
+
+    def test_set_property_empty_string_encodes_null_byte(self, mock_paho):
+        ctrl, mock_client = _make_controller(mock_paho)
+
+        result = ctrl.set_property("panel-1", "info", "label", "")
+
+        assert result is True
+        expected_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/panel-1/info/label/set"
+        mock_client.publish.assert_called_once_with(expected_topic, "\x00", qos=EBUS_HOMIE_MQTT_QOS, retain=False)
 
     def test_set_property_no_connection(self, mock_paho):
         ctrl, _ = _make_controller(mock_paho)

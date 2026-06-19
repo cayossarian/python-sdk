@@ -21,13 +21,15 @@ This is the initial version, there are things to add in the future (as needed):
     by publishing an empty message to those topics
     (an actual empty string on MQTT level, so NOT the escaped 0x00 byte, see also empty string values)
     https://github.com/eclipse-paho/paho.mqtt.python/blob/master/examples/client_mqtt_clear_retain.py#L43
-* Support/handle empty string values:
+* Empty string values (IMPLEMENTED — see encode_empty_string / decode_empty_string):
     MQTT will treat an empty string payload as a “delete” instruction for the topic,
     therefore an empty string value is represented by a 1-character string containing a single byte value 0 (Hex: 0x00, Dec: 0).
     The empty string (passed as an MQTT payload) can only occur in 3 places;
         homie / 5 / [device ID] / [node ID] / [property ID]; reported property values (for string types)
         homie / 5 / [device ID] / [node ID] / [property ID] / set; the topic to set properties (of string types)
         homie / 5 / [device ID] / [node ID] / [property ID] / $target; the target property value (for string types)
+    The SDK encodes "" as 0x00 on publish (Property.publish_value, Controller.set_property) and decodes
+    0x00 back to "" on receive (Controller._on_property_message / _on_target_message, Property._settable_callback).
     This convention specifies no way to represent an actual value of a 1-character string with a single byte 0.
     If a device needs this, then it should provide an escape mechanism on the application level.
 * Given that Nodes and Properties belong to, and contain pointers to, the owning Device (and Node, for Properties),
@@ -73,6 +75,41 @@ if EBUS_HOMIE_MQTT_QOS < 1:
     logger.warning(
         f"reason=homieQosLessThanOne,specifiedQos={EBUS_HOMIE_MQTT_QOS},defaultQos={EBUS_HOMIE_MQTT_QOS_DEFAULT}"
     )
+
+# Homie 5 empty-string value encoding.
+#
+# A zero-length MQTT payload means "clear the retained topic" (see
+# Property.clear_value / set_value(None)). So the convention encodes an actual
+# empty-string *value* as a 1-character payload containing a single null byte
+# (0x00). This lets "" be distinguished on the wire from "delete this topic".
+# Applies to the three places an empty string can occur: a reported property
+# value, a .../set payload, and a $target value (all for string types).
+#
+# The convention provides no way to represent a genuine 1-character string whose
+# sole character is 0x00; a device needing that must escape it at the
+# application level (see module header).
+HOMIE_EMPTY_STRING_PAYLOAD = "\x00"
+
+
+def encode_empty_string(value: str) -> str:
+    """
+    Encode a property value for the wire per the Homie 5 empty-string convention:
+    an empty string becomes a single 0x00 byte; every other value passes through
+    unchanged. Call this only for genuine values — a cleared/absent value (None)
+    goes through clear_value(), not here.
+    """
+    return HOMIE_EMPTY_STRING_PAYLOAD if value == "" else value
+
+
+def decode_empty_string(payload: str) -> str:
+    """
+    Decode an inbound MQTT payload per the Homie 5 empty-string convention: a
+    single 0x00 byte becomes an empty string; every other payload passes through
+    unchanged. (A truly zero-length payload is a topic clear and is handled by
+    the caller before reaching here.)
+    """
+    return "" if payload == HOMIE_EMPTY_STRING_PAYLOAD else payload
+
 
 # Helper character constants for units
 UNICODE_DEGREE = "\u00b0"
@@ -548,8 +585,11 @@ class Property:
                     f"reason=propertyPublishValueCoercionFailed,propertyID={self._id},rawValue={self._value}"
                 )
                 return False
+            # Encode an empty-string value as a single 0x00 byte so the broker
+            # does not mistake it for a zero-length "clear retained" payload.
+            payload = encode_empty_string(value)
             logger.debug(f"reason=propertyPublishValue,value={value},topic={topic},retained={self.retained()}")
-            mqttc.publish(topic, value, retain=self.retained(), qos=self._qos)
+            mqttc.publish(topic, payload, retain=self.retained(), qos=self._qos)
             self._ever_published = True  # FIX: Mark as published
             self._skip_initial_publish = False  # FIX: Clear skip flag after first publish
             return True
@@ -667,6 +707,8 @@ class Property:
             return
         try:
             decoded_payload = payload.decode("utf-8")  # do we need to str() this?
+            # Homie 5: a single 0x00 byte on /set denotes an empty-string value.
+            decoded_payload = decode_empty_string(decoded_payload)
             if self.is_json_datatype():
                 payload = json.loads(decoded_payload)
             else:
@@ -2152,6 +2194,9 @@ class Controller:
             return
 
         payload_str = payload.decode("utf-8") if isinstance(payload, bytes) else payload
+        # Homie 5: a single 0x00 byte denotes an empty-string value (a truly
+        # zero-length payload would instead be a retained-topic clear).
+        payload_str = decode_empty_string(payload_str)
         device = self.devices[device_id]
         old_value = device.get_property(node_id, property_id)
         device.update_property(node_id, property_id, payload_str)
@@ -2179,6 +2224,7 @@ class Controller:
             return
 
         payload_str = payload.decode("utf-8") if isinstance(payload, bytes) else payload
+        payload_str = decode_empty_string(payload_str)
         device = self.devices[device_id]
         device.update_property_target(node_id, property_id, payload_str)
 
@@ -2219,8 +2265,11 @@ class Controller:
 
         logger.info(f"reason=settingProperty,topic={set_topic},value={value}")
         try:
-            # Non-retained message as per convention
-            self.mqttc.publish(set_topic, value, qos=effective_qos, retain=False)
+            # Non-retained message as per convention. Encode an empty-string
+            # value as a single 0x00 byte (Homie 5) so the device's /set handler
+            # receives "" rather than a zero-length payload.
+            payload = encode_empty_string(value)
+            self.mqttc.publish(set_topic, payload, qos=effective_qos, retain=False)
             return True
         except Exception as e:
             logger.error(f"reason=setPropertyException,error={e}")
