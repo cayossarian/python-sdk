@@ -28,6 +28,12 @@ Publishes a single eBus utility-meter device (`energy.ebus.device.utility-meter`
 ./utility-meter --config ./utility-meter-cfg.example.json --broker-config /path/to/broker-cfg.json
 ```
 
+Add `--discover` to find the broker over mDNS (`_secure-mqtt._tcp`) instead of using the `host`/`port` in the broker config; the broker config still supplies the TLS material. Needs the `mdns` extra (`pip install 'ebus-sdk[mdns]'`):
+
+```bash
+./utility-meter --config ./utility-meter-cfg.example.json --broker-config /path/to/broker-cfg.json --discover
+```
+
 Set DOE values at runtime:
 
 ```bash

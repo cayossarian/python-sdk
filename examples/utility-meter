@@ -550,6 +550,56 @@ def start_tick_thread(meter: UtilityMeter, interval_s: float) -> threading.Event
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 
+def _discover_broker(
+    timeout: float, log: logging.Logger
+) -> Optional[tuple]:
+    """Discover an eBus broker over mDNS (`_secure-mqtt._tcp`).
+
+    Returns (host, port) from the advertisement, preferring the spec `broker`
+    TXT record (the `<host>.local` name the broker's cert SAN covers) and
+    falling back to the SRV target. Returns None on timeout. Requires the
+    optional `mdns` extra (zeroconf).
+    """
+    try:
+        from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
+    except ImportError:
+        log.error(
+            "discovery needs the 'mdns' extra: pip install 'ebus-sdk[mdns]'"
+        )
+        return None
+
+    service_type = "_secure-mqtt._tcp.local."
+    found = threading.Event()
+    result: Dict[str, Any] = {}
+
+    class _Listener(ServiceListener):
+        def add_service(self, zc, type_, name):
+            info = zc.get_service_info(type_, name, timeout=3000)
+            if info is None:
+                return
+            broker = info.properties.get(b"broker")
+            result["host"] = (
+                broker.decode() if broker else info.server.rstrip(".")
+            )
+            result["port"] = info.port or 8883
+            found.set()
+
+        def update_service(self, zc, type_, name):
+            self.add_service(zc, type_, name)
+
+        def remove_service(self, zc, type_, name):
+            pass
+
+    zc = Zeroconf()
+    ServiceBrowser(zc, service_type, _Listener())
+    try:
+        if found.wait(timeout):
+            return result["host"], result["port"]
+        return None
+    finally:
+        zc.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -568,6 +618,19 @@ def main():
         "--broker-config",
         help="Path to the MQTT broker config JSON file. "
         f"Defaults to ${DEFAULT_BROKER_CFG_ENV} env var.",
+    )
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Discover the broker over mDNS (_secure-mqtt._tcp) and use the "
+        "advertised host/port, overriding 'host'/'port' in the broker config. "
+        "The broker config still supplies the TLS material.",
+    )
+    parser.add_argument(
+        "--discover-timeout",
+        type=float,
+        default=8.0,
+        help="Seconds to wait for mDNS broker discovery (default: 8.0).",
     )
     parser.add_argument(
         "--doe-port",
@@ -603,6 +666,29 @@ def main():
         )
         sys.exit(2)
     mqtt_cfg = UtilityMeterAdapter.load_broker_config(broker_cfg_path)
+
+    # Prefer an mDNS-discovered broker over the config's explicit host, per the
+    # eBus broker-discovery flow. The broker config still supplies the TLS
+    # material; discovery only fills in where to connect.
+    if args.discover:
+        endpoint = _discover_broker(args.discover_timeout, log)
+        if endpoint is not None:
+            mqtt_cfg["host"], mqtt_cfg["port"] = endpoint
+            log.info(
+                "reason=brokerDiscovered,host=%s,port=%d",
+                mqtt_cfg["host"],
+                mqtt_cfg["port"],
+            )
+        elif mqtt_cfg.get("host"):
+            log.warning(
+                "reason=brokerDiscoveryTimeout,fallbackHost=%s",
+                mqtt_cfg["host"],
+            )
+        else:
+            log.error(
+                "broker discovery failed and no fallback 'host' in broker config"
+            )
+            sys.exit(2)
 
     # Resolve device identity from config
     device_id = meter_cfg.get("device-id") or meter_cfg.get("info", {}).get(
