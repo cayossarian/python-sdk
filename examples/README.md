@@ -51,11 +51,13 @@ Envelope fields: `power-limit` (integer W) and/or `apparent-power-limit` (intege
 SPAN Panel controller with mDNS discovery. Connects via MQTTS and monitors power flow properties.
 
 Requires the `mdns` extra:
+
 ```bash
 pip install ebus-sdk[mdns]
 ```
 
 **Basic usage (requires password):**
+
 ```bash
 ./simple-span-controller <serial-number> <password>
 ./simple-span-controller <serial-number> <password> --broker-host 192.168.1.100
@@ -77,6 +79,7 @@ export PYTHONPATH=$PYTHONPATH:/path/to/SPAN-API-Client-Docs/lib
 ```
 
 When SPAN-API utilities are available:
+
 - Password is retrieved from `~/.span-auth.json` if not provided on command line
 - CA certificate is fetched/cached in `~/.span-ca-certs/` for secure TLS verification
 - Use `--insecure` to skip certificate verification even when CA cert is available
@@ -136,6 +139,7 @@ For MQTTS with CA certificate verification (secure mode):
 ```
 
 **TLS Options:**
+
 - `use_tls`: Enable TLS/SSL connection (required for port 8883)
 - `tls_ca_cert`: Path to CA certificate file for server verification
 - `tls_ca_data`: CA certificate content as PEM string or DER bytes (alternative to file)
