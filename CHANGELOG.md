@@ -4,7 +4,11 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
-## [0.4.0] — 2026-06-19
+## [0.4.1] — 2026-07-01
+
+### Fixed
+
+- `json`-datatype property values are now serialized to valid JSON on publish. `Property.coerced_value()` had no `json` branch, so a `dict` or `list` value fell through to `str()` and emitted Python `repr` (single quotes, `True`/`False`/`None`) — invalid JSON on the wire — while the inbound `/set` path already parsed JSON via `json.loads`. The asymmetry broke the round trip: a value received on `/set` and re-published went out malformed, and any application setting a `dict`/`list` on a `json` property emitted invalid JSON. `coerced_value()` now mirrors the inbound path: `json.dumps` for `dict`/`list` (and other non-`str` values), pass-through for an already-serialized JSON `str` (no double-encoding), and a guarded coercion failure for a non-serializable value. This unblocks any `json`-typed control surface — e.g. the water-heater `dr` capability and the utility-meter `doe` envelopes. Closes SDK-3c8 / GitHub #4.
 
 ### Added
 
@@ -93,7 +97,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.4.1
 [0.4.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.4.0
 [0.3.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.3.1
 [0.3.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.3.0
