@@ -320,6 +320,36 @@ class TestHomiePropertyCoercion:
         p = Property(id="color", value=Color.RED, datatype=PropertyDatatype.ENUM)
         assert p.coerced_value() == "red"
 
+    def test_coerced_value_json_dict(self):
+        # A dict on a json property must serialize to valid JSON (json.dumps),
+        # not Python repr (str() would emit single quotes). SDK-3c8 / GH #4.
+        value = {"mode": "SHED", "duration": 3600, "active": True, "note": None}
+        p = Property(id="event", value=value, datatype=PropertyDatatype.JSON)
+        coerced = p.coerced_value()
+        assert "'" not in coerced  # no Python-repr single quotes
+        assert json.loads(coerced) == value  # round-trips back to the dict
+
+    def test_coerced_value_json_list(self):
+        # The utility-meter doe model uses json arrays of envelope objects.
+        value = [{"power-limit": 30000, "source": "GRID"}, {"power-limit": 0}]
+        p = Property(id="import-limit", value=value, datatype=PropertyDatatype.JSON)
+        assert json.loads(p.coerced_value()) == value
+
+    def test_coerced_value_json_string_passthrough(self):
+        # An already-serialized JSON string must not be double-encoded.
+        text = '{"mode":"SHED","duration":3600}'
+        p = Property(id="event", value=text, datatype=PropertyDatatype.JSON)
+        assert p.coerced_value() == text
+        assert json.loads(p.coerced_value()) == {"mode": "SHED", "duration": 3600}
+
+    def test_coerced_value_json_roundtrip_via_settable(self):
+        # A value received on /set (parsed to a dict by the inbound path) must
+        # re-publish as valid JSON: inbound json.loads and outbound json.dumps
+        # agree on the stored Python type (dict). SDK-3c8 / GH #4.
+        received = json.loads('{"mode":"LOAD_UP","duration":1800}')  # inbound /set path
+        p = Property(id="event", value=received, datatype=PropertyDatatype.JSON)
+        assert json.loads(p.coerced_value()) == received
+
 
 class TestHomiePropertyPublish:
     def test_publish_value_success(self):

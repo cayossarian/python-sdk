@@ -438,6 +438,20 @@ class Property:
         if property_value is None:
             return None
 
+        # A json-datatype property's wire payload MUST be serialized JSON text
+        # (Homie 5 §JSON), the same serialization used for $description. Mirror
+        # the inbound /set path (json.loads); do NOT fall through to str(), which
+        # emits Python repr (single quotes) and is invalid JSON. An already-valid
+        # JSON string is passed through unchanged so we don't double-encode it.
+        if self.is_json_datatype():
+            if isinstance(property_value, str):
+                return property_value
+            try:
+                return json.dumps(property_value)
+            except (TypeError, ValueError) as e:
+                logger.warning(f"reason=coercedValueInvalidJson,propertyId={self._id},value={property_value},error={e}")
+                return None
+
         property_type = self.datatype()
         if property_type == PropertyDatatype.BOOLEAN:
             if not isinstance(property_value, bool):
