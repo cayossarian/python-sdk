@@ -35,5 +35,14 @@
     "tamper-state": "NORMAL"
   },
 
-  "doe": {}
+  "doe": {
+    "import-limit": [
+      {
+        "power-limit": 19200,
+        "apparent-power-limit": 20000,
+        "source": "CONTRACT",
+        "start-time": "2026-07-01T00:00:00Z"
+      }
+    ]
+  }
 }

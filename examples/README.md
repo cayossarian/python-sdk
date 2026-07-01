@@ -22,7 +22,7 @@ Controller that auto-discovers Homie devices and monitors property changes.
 
 ### utility-meter
 
-Publishes a single eBus utility-meter device (`energy.ebus.device.utility-meter`, per the Electrification Bus `data-models/utility-meter.md`) with the standard `info` / `meter` / `status` / `doe` capabilities. Includes a local HTTP endpoint for runtime DOE updates (`POST /doe/import-limit`).
+Publishes a single eBus utility-meter device (`energy.ebus.device.utility-meter`, per the Electrification Bus `data-models/utility-meter.md`) with the standard `info` / `meter` / `status` / `doe` capabilities. The `doe` capability is two `json` properties (`doe/import-limit`, `doe/export-limit`), each a JSON array of time-windowed envelope objects. A local HTTP endpoint stands in for the utility's out-of-band backhaul for runtime DOE updates (`POST /doe/import-limit`, `POST /doe/export-limit`).
 
 ```bash
 ./utility-meter --config ./utility-meter-cfg.example.json --broker-config /path/to/broker-cfg.json
@@ -34,13 +34,15 @@ Add `--discover` to find the broker over mDNS (`_secure-mqtt._tcp`) instead of u
 ./utility-meter --config ./utility-meter-cfg.example.json --broker-config /path/to/broker-cfg.json --discover
 ```
 
-Set DOE values at runtime:
+Set a DOE envelope at runtime. The body is a single envelope object or an array of them (the retained schedule); it is set atomically as one `json` value:
 
 ```bash
 curl -X POST http://localhost:8765/doe/import-limit \
   -H 'Content-Type: application/json' \
-  -d '{"watts": 12000, "source": "GRID", "validUntil": "2026-06-07T19:00:00Z"}'
+  -d '[{"power-limit": 12000, "source": "GRID", "start-time": "2026-07-01T16:00:00Z", "end-time": "2026-07-01T20:00:00Z"}]'
 ```
+
+Envelope fields: `power-limit` (integer W) and/or `apparent-power-limit` (integer VA) — at least one required; `source` (one of `CONTRACT` / `REGULATOR` / `EQUIPMENT` / `GRID` / `UNKNOWN`, optional); `start-time` / `end-time` (ISO-8601 UTC, optional). POST an empty body or `null` to clear the signal for that direction. The same shape is served at `/doe/export-limit`.
 
 ### simple-span-controller
 

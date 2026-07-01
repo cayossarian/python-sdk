@@ -11,12 +11,21 @@ Intended for developers building an eBus utility-meter publisher who want
 a runnable starting point. Suitable for running on a Raspberry Pi or any
 Linux host as a stand-in for a real utility meter on a test bench.
 
-The DOE values (`doe/power-import-limit`, source, valid-until) are
-controllable at runtime via a small HTTP endpoint:
+The DOE envelopes (`doe/import-limit`, `doe/export-limit`) are two `json`
+properties, each a JSON array of time-windowed envelope objects. They are
+controllable at runtime via a small HTTP endpoint that stands in for the
+utility's out-of-band backhaul:
 
     POST http://localhost:8765/doe/import-limit
     Content-Type: application/json
-    { "watts": 12000, "source": "GRID", "validUntil": "2026-06-07T19:00:00Z" }
+    [ { "power-limit": 12000, "source": "GRID",
+        "start-time": "2026-07-01T16:00:00Z",
+        "end-time":   "2026-07-01T20:00:00Z" } ]
+
+The body is a single envelope object or an array of them (the retained
+schedule); the whole array is set atomically as one json value. POST an
+empty body (or `null`) to clear the signal for that direction. The same
+endpoint shape is served at `/doe/export-limit`.
 
 Meter measurements (`meter/active-power`, etc.) are synthesised from a config
 file — this is a publisher reference, not a metrology device.
@@ -59,6 +68,15 @@ CAPABILITY_INFO = "energy.ebus.capability.info"
 CAPABILITY_METER = "energy.ebus.capability.meter"
 CAPABILITY_STATUS = "energy.ebus.capability.status"
 CAPABILITY_DOE = "energy.ebus.capability.doe"
+
+# doe capability: two json properties, one per direction. Each holds a JSON
+# array of envelope objects per the eBus utility-meter data model (v0.2).
+DOE_DIRECTIONS = ("import-limit", "export-limit")
+
+# Envelope `source` enum (absent = UNKNOWN) per the data model.
+DOE_SOURCES = frozenset(
+    {"CONTRACT", "REGULATOR", "EQUIPMENT", "GRID", "UNKNOWN"}
+)
 
 
 # ─── Logger boilerplate ───────────────────────────────────────────────────────
@@ -151,38 +169,50 @@ class UtilityMeter:
     # ── doe ──
 
     def _populate_doe(self):
-        """Initial DOE values. May be empty / absent — DOE is publish-on-change."""
+        """
+        Initial DOE envelopes from config. May be empty / absent — DOE is
+        publish-on-change and a meter that signals no envelope simply omits
+        the property. Config supplies `doe.import-limit` / `doe.export-limit`
+        as JSON arrays of envelope objects; each becomes one `json` property.
+        """
         doe = self._config.get("doe", {})
-        # Defaults: no initial limit signalled. Setting these via the HTTP
-        # endpoint is the primary way DOE values flow into the meter at
-        # runtime.
-        for key, value in doe.items():
-            self._props.add_property_from_dict(
-                "doe", {"id": key, "type": type(value), "value": value}
-            )
+        for direction in DOE_DIRECTIONS:
+            envelopes = doe.get(direction)
+            if envelopes:
+                self._props.add_property_from_dict(
+                    "doe",
+                    {"id": direction, "type": "json", "value": list(envelopes)},
+                )
 
-    def set_doe_import_limit(
-        self,
-        watts: Optional[int],
-        source: Optional[str] = None,
-        valid_until: Optional[str] = None,
-    ):
-        """
-        Update the DOE import-limit triplet atomically.
+    def set_doe_import_limit(self, envelopes):
+        """Set the import-side DOE schedule atomically. See `_set_doe`."""
+        self._set_doe("import-limit", envelopes)
 
-        `watts=None` clears the limit (publishes an absent / empty value
-        per the eBus interface spec). Non-None watts are coerced to int —
-        the eBus utility-meter data model defines `power-import-limit` as
-        integer Watts (non-negative; whole watts). `source` is one of
-        CONTRACT / REGULATOR / EQUIPMENT / GRID / UNKNOWN. `valid_until`
-        is ISO-8601 UTC or None.
+    def set_doe_export_limit(self, envelopes):
+        """Set the export-side DOE schedule atomically. See `_set_doe`."""
+        self._set_doe("export-limit", envelopes)
+
+    def _set_doe(self, direction: str, envelopes):
         """
-        watts = int(watts) if watts is not None else None
-        self._set_or_clear("doe", "power-import-limit", watts, int)
-        self._set_or_clear("doe", "power-import-limit-source", source, str)
-        self._set_or_clear(
-            "doe", "power-import-limit-valid-until", valid_until, str
-        )
+        Set one direction's DOE envelope as a single `json` array, atomically.
+
+        `envelopes` is a single envelope dict, a list of envelope dicts (the
+        retained schedule), or None to clear the signal. A dict is wrapped in
+        a one-element array. Setting None retracts the retained topic, which
+        the data model treats as absence (no meter-signaled limit for that
+        direction). The whole array is one retained value, so each update is a
+        single atomic transaction — the whole point of the json-per-direction
+        model over parallel scalar topics.
+        """
+        if direction not in DOE_DIRECTIONS:
+            raise ValueError(f"unknown doe direction: {direction}")
+        if envelopes is None:
+            value = None
+        elif isinstance(envelopes, dict):
+            value = [envelopes]
+        else:
+            value = list(envelopes)
+        self._set_or_clear("doe", direction, value, "json")
 
     def _set_or_clear(self, group, prop_id, value, py_type):
         try:
@@ -288,16 +318,10 @@ HOMIE_PROPERTY_HINTS: Dict[str, Dict[str, Dict[str, Any]]] = {
         "tamper-state": {"datatype": homie.PropertyDatatype.ENUM},
     },
     "doe": {
-        "power-import-limit": {
-            "datatype": homie.PropertyDatatype.INTEGER,
-            "unit": homie.Unit.WATT,
-        },
-        "power-import-limit-source": {
-            "datatype": homie.PropertyDatatype.ENUM,
-        },
-        "power-import-limit-valid-until": {
-            "datatype": homie.PropertyDatatype.DATETIME,
-        },
+        # Two json properties, one per direction; each value is a JSON array
+        # of time-windowed envelope objects. Publish-only (no /set).
+        "import-limit": {"datatype": homie.PropertyDatatype.JSON},
+        "export-limit": {"datatype": homie.PropertyDatatype.JSON},
     },
 }
 
@@ -458,6 +482,55 @@ class UtilityMeterAdapter:
 # ─── DOE HTTP endpoint ────────────────────────────────────────────────────────
 
 
+# Map POST path to the doe direction it drives.
+_DOE_PATHS = {
+    "/doe/import-limit": "import-limit",
+    "/doe/export-limit": "export-limit",
+}
+
+
+def _validate_doe_body(body: Any) -> Optional[list]:
+    """
+    Normalize and lightly validate a posted DOE body into an envelope array
+    (or None to clear).
+
+    Accepts None (clear), a single envelope object, or an array of them.
+    Enforces the data-model invariants that are cheap to check here: at least
+    one of `power-limit` / `apparent-power-limit` present and a non-negative
+    integer, and `source` (if present) one of the defined enum values. Raises
+    ValueError on a malformed body. Time-window sanity (ISO-8601, ordering) is
+    left to the utility backhaul that would drive this in production.
+    """
+    if body is None:
+        return None
+    envelopes = [body] if isinstance(body, dict) else body
+    if not isinstance(envelopes, list):
+        raise ValueError("body must be an envelope object, an array, or null")
+    for i, env in enumerate(envelopes):
+        if not isinstance(env, dict):
+            raise ValueError(f"envelope[{i}] must be an object")
+        has_limit = False
+        for key in ("power-limit", "apparent-power-limit"):
+            if key not in env:
+                continue
+            has_limit = True
+            v = env[key]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise ValueError(
+                    f"envelope[{i}].{key} must be a non-negative integer"
+                )
+        if not has_limit:
+            raise ValueError(
+                f"envelope[{i}] must have power-limit or apparent-power-limit"
+            )
+        source = env.get("source")
+        if source is not None and source not in DOE_SOURCES:
+            raise ValueError(
+                f"envelope[{i}].source must be one of {sorted(DOE_SOURCES)}"
+            )
+    return envelopes
+
+
 class _DoeRequestHandler(BaseHTTPRequestHandler):
     """Tiny HTTP handler accepting DOE updates as JSON."""
 
@@ -472,24 +545,33 @@ class _DoeRequestHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self):
-        if self.path != "/doe/import-limit":
-            self._reply(HTTPStatus.NOT_FOUND, {"error": "unknown path"})
+        direction = _DOE_PATHS.get(self.path)
+        if direction is None:
+            self._reply(
+                HTTPStatus.NOT_FOUND,
+                {"error": "unknown path", "known": sorted(_DOE_PATHS)},
+            )
             return
         length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length).decode("utf-8") if length else ""
         try:
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            # An empty body clears the signal for this direction (same as null).
+            body = json.loads(raw) if raw.strip() else None
         except Exception as exc:
             self._reply(HTTPStatus.BAD_REQUEST, {"error": f"invalid json: {exc}"})
             return
-        watts = body.get("watts")
-        source = body.get("source")
-        valid_until = body.get("validUntil")
-        # TODO: validate `source` is one of the enum values defined by
-        # the eBus utility-meter data model's `doe/power-import-limit-source`;
-        # validate `validUntil` parses as ISO-8601 UTC; validate `watts` is
-        # a non-negative integer (or null to clear).
         try:
-            self.meter.set_doe_import_limit(watts, source, valid_until)
+            envelopes = _validate_doe_body(body)
+        except ValueError as exc:
+            self._reply(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+        setter = (
+            self.meter.set_doe_import_limit
+            if direction == "import-limit"
+            else self.meter.set_doe_export_limit
+        )
+        try:
+            setter(envelopes)
         except Exception as exc:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)}
@@ -499,9 +581,8 @@ class _DoeRequestHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             {
                 "applied": {
-                    "watts": watts,
-                    "source": source,
-                    "validUntil": valid_until,
+                    "direction": direction,
+                    "envelopes": envelopes,
                     "at": datetime.now(timezone.utc).isoformat(),
                 }
             },
@@ -524,7 +605,7 @@ def start_doe_endpoint(meter: UtilityMeter, port: int) -> ThreadingHTTPServer:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     logging.getLogger("DoeEndpoint").info(
-        "reason=doeEndpointReady,port=%d,path=/doe/import-limit", port
+        "reason=doeEndpointReady,port=%d,paths=%s", port, ",".join(sorted(_DOE_PATHS))
     )
     return server
 
