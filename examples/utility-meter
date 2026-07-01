@@ -49,7 +49,7 @@ from datetime import datetime, timezone
 from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from ebus_sdk import homie
 from ebus_sdk.property import ChangeEvent, GroupedPropertyDict, Property
@@ -74,9 +74,7 @@ CAPABILITY_DOE = "energy.ebus.capability.doe"
 DOE_DIRECTIONS = ("import-limit", "export-limit")
 
 # Envelope `source` enum (absent = UNKNOWN) per the data model.
-DOE_SOURCES = frozenset(
-    {"CONTRACT", "REGULATOR", "EQUIPMENT", "GRID", "UNKNOWN"}
-)
+DOE_SOURCES = frozenset({"CONTRACT", "REGULATOR", "EQUIPMENT", "GRID", "UNKNOWN"})
 
 
 # ─── Logger boilerplate ───────────────────────────────────────────────────────
@@ -87,11 +85,7 @@ def _make_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     logger.setLevel(level)
     if not logger.handlers:
         handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-        )
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
         logger.addHandler(handler)
     return logger
 
@@ -136,9 +130,7 @@ class UtilityMeter:
         # serial-number, meter-form, meter-class, phases, neutral-connected,
         # nominal-frequency, nominal-phase-angle, nominal-voltage-*).
         for key, value in info.items():
-            self._props.add_property_from_dict(
-                "info", {"id": key, "type": type(value), "value": value}
-            )
+            self._props.add_property_from_dict("info", {"id": key, "type": type(value), "value": value})
 
     # ── meter ──
 
@@ -149,9 +141,7 @@ class UtilityMeter:
         # config-supplied values are sufficient.
         meter = self._config.get("meter", {})
         for key, value in meter.items():
-            self._props.add_property_from_dict(
-                "meter", {"id": key, "type": type(value), "value": value}
-            )
+            self._props.add_property_from_dict("meter", {"id": key, "type": type(value), "value": value})
 
     # ── status ──
 
@@ -162,9 +152,7 @@ class UtilityMeter:
         }
         defaults.update(self._config.get("status", {}))
         for key, value in defaults.items():
-            self._props.add_property_from_dict(
-                "status", {"id": key, "type": type(value), "value": value}
-            )
+            self._props.add_property_from_dict("status", {"id": key, "type": type(value), "value": value})
 
     # ── doe ──
 
@@ -221,9 +209,7 @@ class UtilityMeter:
             existing = None
         if existing is None:
             if value is not None:
-                self._props.add_property_from_dict(
-                    group, {"id": prop_id, "type": py_type, "value": value}
-                )
+                self._props.add_property_from_dict(group, {"id": prop_id, "type": py_type, "value": value})
         else:
             existing.set_value(value)
 
@@ -241,9 +227,7 @@ class UtilityMeter:
     # ── callback registration ──
 
     def add_property_on_change_callback(self, group, prop_id, callback):
-        return self._props.add_property_on_change_callback(
-            group, prop_id, callback
-        )
+        return self._props.add_property_on_change_callback(group, prop_id, callback)
 
     def get_property(self, group, prop_id) -> Property:
         return self._props.get(group, prop_id)
@@ -255,9 +239,7 @@ class UtilityMeter:
 # ─── Adapter: model → Homie/eBus topics ───────────────────────────────────────
 
 
-def _set_homie_property_from_property(
-    homie_property: homie.Property, prop: Property
-) -> bool:
+def _set_homie_property_from_property(homie_property: homie.Property, prop: Property) -> bool:
     """Callback used to mirror UtilityMeter property values onto Homie."""
     return homie_property.set_value(prop.value())
 
@@ -376,9 +358,7 @@ class UtilityMeterAdapter:
         node_name: str,
         meter_group: str,
     ) -> homie.Node:
-        node = self._homie_device.add_node_from_dict(
-            {"id": node_id, "name": node_name, "type": node_type}
-        )
+        node = self._homie_device.add_node_from_dict({"id": node_id, "name": node_name, "type": node_type})
         self._homie_nodes[meter_group] = node
         if not self._meter._props.has_group(meter_group):
             # Empty capability node — properties may be added at runtime
@@ -443,7 +423,8 @@ class UtilityMeterAdapter:
         if node is None:
             self._logger.warning(
                 "reason=runtimePropertyAddUnknownGroup,group=%s,propertyId=%s",
-                group_name, property_id,
+                group_name,
+                property_id,
             )
             return
         self._add_homie_property(node, group_name, property_id, property)
@@ -452,18 +433,14 @@ class UtilityMeterAdapter:
         self._homie_device = self._create_homie_device()
         self._homie_nodes: Dict[str, homie.Node] = {}
         self._homie_property_ids: Dict[str, set] = {}
-        self._add_capability_node(
-            "info", CAPABILITY_INFO, "Meter identity", "info"
-        )
+        self._add_capability_node("info", CAPABILITY_INFO, "Meter identity", "info")
         self._add_capability_node(
             "meter",
             CAPABILITY_METER,
             "Electrical measurements",
             "meter",
         )
-        self._add_capability_node(
-            "status", CAPABILITY_STATUS, "Meter operational state", "status"
-        )
+        self._add_capability_node("status", CAPABILITY_STATUS, "Meter operational state", "status")
         self._add_capability_node(
             "doe",
             CAPABILITY_DOE,
@@ -516,18 +493,12 @@ def _validate_doe_body(body: Any) -> Optional[list]:
             has_limit = True
             v = env[key]
             if not isinstance(v, int) or isinstance(v, bool) or v < 0:
-                raise ValueError(
-                    f"envelope[{i}].{key} must be a non-negative integer"
-                )
+                raise ValueError(f"envelope[{i}].{key} must be a non-negative integer")
         if not has_limit:
-            raise ValueError(
-                f"envelope[{i}] must have power-limit or apparent-power-limit"
-            )
+            raise ValueError(f"envelope[{i}] must have power-limit or apparent-power-limit")
         source = env.get("source")
         if source is not None and source not in DOE_SOURCES:
-            raise ValueError(
-                f"envelope[{i}].source must be one of {sorted(DOE_SOURCES)}"
-            )
+            raise ValueError(f"envelope[{i}].source must be one of {sorted(DOE_SOURCES)}")
     return envelopes
 
 
@@ -565,17 +536,11 @@ class _DoeRequestHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._reply(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
-        setter = (
-            self.meter.set_doe_import_limit
-            if direction == "import-limit"
-            else self.meter.set_doe_export_limit
-        )
+        setter = self.meter.set_doe_import_limit if direction == "import-limit" else self.meter.set_doe_export_limit
         try:
             setter(envelopes)
         except Exception as exc:
-            self._reply(
-                HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)}
-            )
+            self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
             return
         self._reply(
             HTTPStatus.OK,
@@ -598,9 +563,7 @@ class _DoeRequestHandler(BaseHTTPRequestHandler):
 
 
 def start_doe_endpoint(meter: UtilityMeter, port: int) -> ThreadingHTTPServer:
-    handler = type(
-        "BoundDoeRequestHandler", (_DoeRequestHandler,), {"meter": meter}
-    )
+    handler = type("BoundDoeRequestHandler", (_DoeRequestHandler,), {"meter": meter})
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -631,9 +594,7 @@ def start_tick_thread(meter: UtilityMeter, interval_s: float) -> threading.Event
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 
-def _discover_broker(
-    timeout: float, log: logging.Logger
-) -> Optional[tuple]:
+def _discover_broker(timeout: float, log: logging.Logger) -> Optional[tuple]:
     """Discover an eBus broker over mDNS (`_secure-mqtt._tcp`).
 
     Returns (host, port) from the advertisement, preferring the spec `broker`
@@ -644,9 +605,7 @@ def _discover_broker(
     try:
         from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
     except ImportError:
-        log.error(
-            "discovery needs the 'mdns' extra: pip install 'ebus-sdk[mdns]'"
-        )
+        log.error("discovery needs the 'mdns' extra: pip install 'ebus-sdk[mdns]'")
         return None
 
     service_type = "_secure-mqtt._tcp.local."
@@ -659,9 +618,7 @@ def _discover_broker(
             if info is None:
                 return
             broker = info.properties.get(b"broker")
-            result["host"] = (
-                broker.decode() if broker else info.server.rstrip(".")
-            )
+            result["host"] = broker.decode() if broker else info.server.rstrip(".")
             result["port"] = info.port or 8883
             found.set()
 
@@ -682,23 +639,17 @@ def _discover_broker(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description=(
-            "eBus utility-meter publisher reference implementation."
-        )
-    )
+    parser = argparse.ArgumentParser(description=("eBus utility-meter publisher reference implementation."))
     parser.add_argument(
         "-c",
         "--config",
         required=True,
-        help="Path to the meter config JSON file (see "
-        "utility-meter-cfg.example.json).",
+        help="Path to the meter config JSON file (see utility-meter-cfg.example.json).",
     )
     parser.add_argument(
         "-b",
         "--broker-config",
-        help="Path to the MQTT broker config JSON file. "
-        f"Defaults to ${DEFAULT_BROKER_CFG_ENV} env var.",
+        help=f"Path to the MQTT broker config JSON file. Defaults to ${DEFAULT_BROKER_CFG_ENV} env var.",
     )
     parser.add_argument(
         "--discover",
@@ -717,8 +668,7 @@ def main():
         "--doe-port",
         type=int,
         default=DEFAULT_DOE_ENDPOINT_PORT,
-        help="Port for the local DOE HTTP endpoint "
-        f"(default: {DEFAULT_DOE_ENDPOINT_PORT}).",
+        help=f"Port for the local DOE HTTP endpoint (default: {DEFAULT_DOE_ENDPOINT_PORT}).",
     )
     parser.add_argument(
         "--tick-interval",
@@ -737,9 +687,7 @@ def main():
         meter_cfg = json.load(fp)
 
     # Broker config
-    broker_cfg_path = args.broker_config or os.environ.get(
-        DEFAULT_BROKER_CFG_ENV
-    )
+    broker_cfg_path = args.broker_config or os.environ.get(DEFAULT_BROKER_CFG_ENV)
     if not broker_cfg_path:
         log.error(
             "no broker config; pass --broker-config or set %s",
@@ -766,25 +714,21 @@ def main():
                 mqtt_cfg["host"],
             )
         else:
-            log.error(
-                "broker discovery failed and no fallback 'host' in broker config"
-            )
+            log.error("broker discovery failed and no fallback 'host' in broker config")
             sys.exit(2)
 
     # Resolve device identity from config
-    device_id = meter_cfg.get("device-id") or meter_cfg.get("info", {}).get(
-        "serial-number"
-    )
+    device_id = meter_cfg.get("device-id") or meter_cfg.get("info", {}).get("serial-number")
     device_name = meter_cfg.get("device-name", "Utility Meter")
     if not device_id:
-        log.error(
-            "no device-id (and no info.serial-number) in meter config"
-        )
+        log.error("no device-id (and no info.serial-number) in meter config")
         sys.exit(2)
 
-    # Wire it up
+    # Wire it up. Constructing the adapter creates the Homie device, its
+    # capability nodes, and starts the MQTT client (side effects we rely on);
+    # nothing else references it, so we don't bind the instance.
     meter = UtilityMeter(meter_cfg, logger=_make_logger("UtilityMeter"))
-    adapter = UtilityMeterAdapter(
+    UtilityMeterAdapter(
         meter,
         device_id=device_id,
         device_name=device_name,
