@@ -176,15 +176,22 @@ class PropertyDatatype(StrEnum):
 def sanitize_homie_id(value: Optional[str]) -> str:
     """Coerce an arbitrary string to a Homie-legal id segment (a-z, 0-9, -).
 
-    The Homie 5 spec requires device-ids and node/property ids to match
-    ``[a-z][a-z0-9-]*``. This helper coerces vendor-supplied strings
-    (serial numbers, model names, etc.) to a legal form by:
+    The Homie 5 spec allows a topic-level id to contain ONLY lowercase letters
+    ``a``-``z``, digits ``0``-``9``, and the hyphen (``-``). There is no
+    leading-letter requirement, and leading/trailing hyphens are not prohibited
+    (see the convention's topic-ids rule). This helper coerces vendor-supplied
+    strings (serial numbers, model names, etc.) to that character set by:
 
       1. lowercasing
       2. replacing underscores, whitespace, and dots with hyphens
       3. dropping any other character outside ``[a-z0-9-]``
       4. collapsing runs of hyphens
       5. stripping leading/trailing hyphens
+
+    Steps 4 and 5 are deliberate extra normalization, not spec requirements: a
+    pure-digit id (e.g. a bare meter serial ``000010024176``) is legal as-is.
+    The result is always spec-legal, just slightly tidier than the strict
+    minimum the convention demands.
 
     Empty input (``None`` or empty string) returns an empty string. The
     caller is responsible for handling the empty-string case — e.g. by
