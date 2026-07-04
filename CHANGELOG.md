@@ -4,6 +4,14 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-04
+
+### Added
+
+- `PropertySpec` and `build_from_declarations` (new module `ebus_sdk/declaration.py`): the canonical declarative layer for proxies. Describe a device as a list of `PropertySpec`s (capability/node, id, datatype, unit, scale, settable) and materialize the Homie node/property tree, the observable `GroupedPropertyDict` model, and the on-change bindings in a single call. `PropertySpec` is complementary to `property.py`'s observable `Property`: one is the declaration, the other the live value. Also exports `python_type_for`.
+- `ebus_sdk.ha`: a Home Assistant MQTT discovery front door for proxies. `ebus_sdk.ha.parse_device_config` parses a `homeassistant/device/<id>/config` message into a neutral `HADevice` / `HAComponent` model (abbreviated keys, the `~` base-topic macro, `value_template` field recovery, availability, removal/migration); `ebus_sdk.ha.derive_spec` / `unit_for` derive an eBus `PropertySpec` from a component's HA `device_class` / `unit_of_measurement`. This is the vendor-neutral parser previously carried in ekm-proxy, promoted so any proxy can share the HA -> eBus front door. Reference: `doc/ha-mqtt-discovery.md`. The parse-only direction ships here; the reverse (emit HA discovery from a Homie device) is tracked in SDK-dn4 and reuses the same neutral model.
+- `doc/building-a-proxy.md` now documents `PropertySpec` + `build_from_declarations` and the Home Assistant ingestion path.
+
 ## [0.5.0] — 2026-07-03
 
 ### Added

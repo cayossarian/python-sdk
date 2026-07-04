@@ -44,7 +44,7 @@ You can skip it for the trivial case: publishing a handful of static values once
 
 A proxy built this way has three clean layers. Keep them separate.
 
-1. **Declarative definitions (the schema).** A plain data table describing each capability node and its properties: id, datatype, unit, settable, and so on. This is the single source of truth for both the observable model and the Homie tree. The SDK does not prescribe a specific structure; you define your own (dataclasses are common). See [Declarative definitions](#declarative-definitions-in-practice).
+1. **Declarative definitions (the schema).** A list of `PropertySpec`s describing each property: its capability (Homie node), id, datatype, unit, scale, settable. This is the single source of truth for both the observable model and the Homie tree, and `build_from_declarations` materializes both from it. See [Declarative definitions](#declarative-definitions-in-practice).
 2. **The observable model (`GroupedPropertyDict`).** Homie-agnostic. Holds the device's live values as observable `Property` objects grouped by capability (one group per Homie node, conventionally). Your acquisition code calls `model.set_value(group, property_id, value)` and nothing else. It knows nothing about MQTT.
 3. **The adapter.** Builds the Homie `Device` / `Node` / `Property` tree from the declarations, and wires each observable property to its Homie twin with an on-change callback. This is the only layer that touches both the model and Homie.
 
@@ -62,45 +62,52 @@ homie.Property.set_value(...)  ──►  MQTT (ebus/5/<device>/<node>/<property
 
 `GroupedPropertyDict.set_value` fires the change event (and the callback) only when the value actually changes, so re-writing the same value does not republish. That dedup is free.
 
-## The exported helpers
+## The exported pieces
 
-Two functions are exported from `ebus_sdk` so you never hand-roll the mirror:
+`ebus_sdk` exports the whole layer so you never hand-roll it:
 
-- `set_homie_property_from_python_property(homie_property, python_property)`: the on-change adapter. It copies the observable property's current value onto its Homie twin. Register it as a `GroupedPropertyDict` on-change callback via `partial(...)`.
-- `bind_property_to_homie(properties, group, property_id, homie_property)`: a one-call convenience that does the `add_property_on_change_callback(..., partial(set_homie_property_from_python_property, homie_property))` for you. Prefer this.
+- `PropertySpec`: the declaration for one property (its `capability`/node, `prop_id`, `datatype`, `unit`, `scale`, `settable`). The schema layer, complementary to the observable `Property` (which holds the live value).
+- `build_from_declarations(device, model, specs, ...)`: materializes a set of `PropertySpec`s into a live device in one call: one Homie node per capability, an observable `Property` plus a Homie property per spec, and the on-change binding between them, all inside one `state_transition()`. Returns the `{(capability, prop_id): homie.Property}` map.
+- `set_homie_property_from_python_property(homie_property, python_property)`: the low-level on-change mirror (copies an observable property's value onto its Homie twin).
+- `bind_property_to_homie(properties, group, property_id, homie_property)`: registers that mirror as a `GroupedPropertyDict` on-change callback. `build_from_declarations` calls it for you; use it directly when you build the tree yourself.
 
 ## Declarative definitions in practice
 
-Drive the model and the Homie tree from one table so they cannot drift. A common shape is a pair of frozen dataclasses:
+Declare the device as a list of `PropertySpec`s and let `build_from_declarations` create the model, the Homie tree, and the bindings from that one source of truth:
 
 ```python
-from dataclasses import dataclass, field
-from typing import Any, List, Optional
-from ebus_sdk import PropertyDatatype, Unit
+from ebus_sdk import (
+    Device, GroupedPropertyDict, PropertyDatatype, Unit,
+    PropertySpec, build_from_declarations,
+)
 
-@dataclass(frozen=True)
-class PropDecl:
-    id: str
-    python_type: Any                  # float, int, str, bool, "json"
-    datatype: PropertyDatatype
-    unit: Optional[Unit] = None
-    settable: bool = False
-    entity_setter_attr: Optional[str] = None  # method name for inbound /set (see below)
+SUBMETER = [
+    PropertySpec("info", "serial-number", PropertyDatatype.STRING),
+    PropertySpec("meter", "active-power", PropertyDatatype.FLOAT, Unit.WATT),
+    PropertySpec("meter", "imported-energy", PropertyDatatype.FLOAT, Unit.WATT_HOUR, scale=1000.0),
+]
 
-@dataclass(frozen=True)
-class NodeDecl:
-    group: str                        # GroupedPropertyDict group == Homie node id
-    type: str                         # e.g. "energy.ebus.capability.meter"
-    name: str
-    props: List[PropDecl] = field(default_factory=list)
+device = Device("my-meter", type="energy.ebus.device.submeter", mqtt_cfg={...})
+device.start_mqtt_client()
+model = GroupedPropertyDict()
 
-METER = NodeDecl("meter", "energy.ebus.capability.meter", "Meter", [
-    PropDecl("active-power", float, PropertyDatatype.FLOAT, Unit.WATT),
-    PropDecl("imported-energy", float, PropertyDatatype.FLOAT, Unit.WATT_HOUR),
-])
+# One call: nodes + observable model + Homie properties + bindings.
+homie_props = build_from_declarations(device, model, SUBMETER)
+
+# Acquisition code only updates the model; publishing follows.
+model.set_value("meter", "active-power", 1850.0)
 ```
 
-A single build loop then materializes both representations from each declaration: create an observable `Property` in the `GroupedPropertyDict`, create the Homie property with the same metadata, and bind them. Because both sides come from one table, adding a property is a one-line change.
+`build_from_declarations` groups specs by `capability` (one Homie node each), defaulting each node's type to `energy.ebus.capability.<capability>` (override with `node_type=`). Pass `values={(capability, prop_id): value}` to seed initial values through the model. Note `PropertySpec.scale` is metadata for your own value mapping (unit conversion); the builder does not apply it, so scale the value before you `set_value` it.
+
+## Ingesting Home Assistant MQTT discovery
+
+A common proxy source is a device that already publishes Home Assistant MQTT discovery (many gateways do). `ebus_sdk.ha` turns that into this same pattern:
+
+- `ebus_sdk.ha.parse_device_config(payload)` parses a `homeassistant/device/<id>/config` message into a neutral `HADevice` (device metadata plus `HAComponent`s), handling abbreviated keys, the `~` base-topic macro, `value_template` field recovery, availability, and removal messages.
+- `ebus_sdk.ha.derive_spec(device_class, unit_of_measurement, field_name)` turns a component's HA `device_class` + `unit_of_measurement` into a `PropertySpec` (best-effort eBus datatype / unit / scale).
+
+So the HA front door is: subscribe the discovery topics, `parse_device_config` each one, resolve its components to `PropertySpec`s (map the fields you know explicitly, fall back to `derive_spec` for the rest), then `build_from_declarations` them. See [`doc/ha-mqtt-discovery.md`](ha-mqtt-discovery.md) for the discovery format. The reverse direction (emitting HA discovery from a Homie device) is planned; it reuses the same neutral `HADevice` model.
 
 ## Static vs dynamic device shape
 
@@ -168,5 +175,7 @@ It works, and it is tempting because it is fewer lines at first. But it reinvent
 
 - [README Quick Start](../README.md#quick-start): the plain `Device` API for static publishing.
 - [`property.py`](../src/ebus_sdk/property.py): the observable `Property` / `GroupedPropertyDict` / `ChangeEvent` classes.
+- [`declaration.py`](../src/ebus_sdk/declaration.py): `PropertySpec` and `build_from_declarations`.
 - [`adapter.py`](../src/ebus_sdk/adapter.py): the exported mirror helpers.
+- [`ebus_sdk.ha`](../src/ebus_sdk/ha/) and [`doc/ha-mqtt-discovery.md`](ha-mqtt-discovery.md): ingesting Home Assistant MQTT discovery.
 - eBus [`proxy.md`](https://github.com/electrification-bus/specification/blob/main/data-models/proxy.md): the normative proxier / device-id convention.
