@@ -1031,6 +1031,25 @@ class TestChildLifecycleProtocol:
             ]
             assert cleared_state, f"expected $state retained-clear for {device_id}"
 
+    def test_delete_clears_state_before_description(self, mock_paho):
+        """SDK-905: Homie 5 removal order clears $state before other retained topics."""
+        panel, mock_client = _make_device(mock_paho, device_id="panel-1")
+        panel.add_node(panel.new_node("core"))
+        mock_client.publish.reset_mock()
+
+        panel.delete()
+
+        def first_clear_index(suffix):
+            for i, c in enumerate(mock_client.publish.call_args_list):
+                if c[0][0].endswith(f"/panel-1/{suffix}") and c[0][1] == "":
+                    return i
+            return None
+
+        state_i = first_clear_index("$state")
+        desc_i = first_clear_index("$description")
+        assert state_i is not None and desc_i is not None
+        assert state_i < desc_i, "$state must be cleared before $description (spec removal order)"
+
 
 class TestCrossDeviceTransitionCoordination:
     """SDK-yb4: cross-device state_transition() coordination."""

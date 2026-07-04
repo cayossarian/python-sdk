@@ -1423,11 +1423,13 @@ class Device:
             # Recursively delete children first so the broker sees a leaves-first cleanup.
             for child in list(self._children):
                 child.delete()
-            self.delete_all_from_mqtt()
-            # Also clear the device's $state retained topic — delete_all_from_mqtt only
-            # handles property values and $description.
+            # Clear $state FIRST, per the Homie 5 removal order (convention: clear
+            # the retained $state and "the device will cease to exist", then clear
+            # its other retained topics). delete_all_from_mqtt only handles property
+            # values and $description, so $state is cleared here separately.
             base_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}"
             self.clear_retained_topic(f"{base_topic}/$state")
+            self.delete_all_from_mqtt()
         finally:
             self._transition_depth -= 1
         if self._parent is not None:
