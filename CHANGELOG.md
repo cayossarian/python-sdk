@@ -4,6 +4,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- The `energy.ebus.imported` extension (introduced in 0.8.0) is now formally specified in the [Electrification Bus specification](https://github.com/electrification-bus/specification/blob/main/extensions/imported.md). `doc/ha-discovery-bridge.md` and the `ebus_sdk.ha.provenance` docstring link to it instead of describing the extension as provisional.
+
 ## [0.8.0] — 2026-07-04
 
 ### Added

@@ -26,9 +26,9 @@ Homie itself uses "bridge/bridging" for a protocol-gateway device (a parent
 fronting child devices) and ties it to loop prevention (see the convention's
 `$target` rule). That maps to our proxy/adapter ACTOR; we use "imported" here for
 the device's resulting provenance, naming the DIRECTION the marker guards (do not
-re-export what was imported). See issue SDK-dn4. The `energy.ebus.imported`
-extension awaits a formal Homie extension specification document (see
-`../convention/extensions/`).
+re-export what was imported). The `energy.ebus.imported` extension is specified in
+the Electrification Bus specification:
+https://github.com/electrification-bus/specification/blob/main/extensions/imported.md
 """
 
 from __future__ import annotations

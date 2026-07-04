@@ -144,7 +144,7 @@ Device(
 
 and readers use `is_imported(device)` / `imported_source(device)`.
 
-Note on terminology: Homie itself uses "bridge" for a protocol-gateway device (a parent fronting child devices), which maps to our proxy/adapter ACTOR, not to a device's provenance. We use "imported" for the marker to name the DIRECTION it guards (do not re-export what was imported), keeping the actor ("bridge" / "proxy") and the resulting state ("imported") distinct. The `energy.ebus.imported` extension is provisional pending a formal Homie extension specification document (see `../convention/extensions/`).
+Note on terminology: Homie itself uses "bridge" for a protocol-gateway device (a parent fronting child devices), which maps to our proxy/adapter ACTOR, not to a device's provenance. We use "imported" for the marker to name the DIRECTION it guards (do not re-export what was imported), keeping the actor ("bridge" / "proxy") and the resulting state ("imported") distinct. The `energy.ebus.imported` extension is formally specified in the [Electrification Bus specification](https://github.com/electrification-bus/specification/blob/main/extensions/imported.md).
 
 Beyond the two guards, the operational separations still apply: run the two directions on different discovery prefixes or brokers, or scope the bridge with `include=[...]`.
 
