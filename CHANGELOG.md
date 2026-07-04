@@ -4,6 +4,12 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-07-04
+
+### Added
+
+- `resolve` and `specs_and_values` (with the `ResolvedProperty` record) in `ebus_sdk.declaration`: the two-tier mapping mechanism for proxies. `resolve(field_names, values, mapping, *, fallback=...)` turns source fields into `PropertySpec`s and scaled values, using a hand-authored domain-specific `mapping` first (authoritative: exact eBus names/units/scale) and a generic `fallback` (e.g. `ebus_sdk.ha.derive_spec`, which infers from HA `device_class`/`unit`) for the rest; a field with neither is held, never guessed. `specs_and_values` splits the result straight into the `specs` and `values=` that `build_from_declarations` consumes. `doc/building-a-proxy.md` now spells out the domain-specific vs general-HA mapper distinction and the resolve precedence.
+
 ## [0.6.0] — 2026-07-04
 
 ### Added

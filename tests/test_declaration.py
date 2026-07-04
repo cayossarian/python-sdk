@@ -8,7 +8,42 @@ from ebus_sdk import (
     Unit,
     build_from_declarations,
     python_type_for,
+    resolve,
+    specs_and_values,
 )
+
+_MAP = {
+    "kWh_Tot": PropertySpec("meter", "imported-energy", PropertyDatatype.FLOAT, Unit.WATT_HOUR, scale=1000.0),
+    "RMS_Watts_Tot": PropertySpec("meter", "active-power", PropertyDatatype.FLOAT, Unit.WATT),
+}
+
+
+def test_resolve_explicit_mapping_applies_scale():
+    fields = {"kWh_Tot": 22.5, "RMS_Watts_Tot": 719}
+    resolved = {r.spec.prop_id: r for r in resolve(fields.keys(), fields, _MAP)}
+    assert resolved["imported-energy"].value == 22500.0  # kWh -> Wh
+    assert resolved["active-power"].value == 719
+
+
+def test_resolve_fallback_fills_gaps_and_holds_unmapped():
+    fields = {"kWh_Tot": 1.0, "vendor_temp": 21.5, "mystery": 9}
+    fb_spec = PropertySpec("meter", "vendor-temp", PropertyDatatype.FLOAT, Unit.DEGREE_CELSIUS)
+    resolved = resolve(fields.keys(), fields, _MAP, fallback=lambda f: fb_spec if f == "vendor_temp" else None)
+    prop_ids = {r.spec.prop_id for r in resolved}
+    assert prop_ids == {"imported-energy", "vendor-temp"}  # explicit + fallback; "mystery" held
+    assert len(resolved) == 2
+
+
+def test_resolve_declared_without_value_yields_none():
+    resolved = resolve(["kWh_Tot"], {}, _MAP)
+    assert len(resolved) == 1 and resolved[0].value is None
+
+
+def test_specs_and_values_split_omits_none():
+    resolved = resolve(["kWh_Tot", "RMS_Watts_Tot"], {"kWh_Tot": 2.0}, _MAP)
+    specs, values = specs_and_values(resolved)
+    assert len(specs) == 2  # both declared
+    assert values == {("meter", "imported-energy"): 2000.0}  # only the observed one, scaled
 
 
 def test_python_type_for():

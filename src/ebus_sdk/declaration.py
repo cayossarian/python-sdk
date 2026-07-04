@@ -118,3 +118,61 @@ def build_from_declarations(
             if (capability, prop_id) in homie_props:
                 model.set_value(capability, prop_id, value)
     return homie_props
+
+
+@dataclass(frozen=True)
+class ResolvedProperty:
+    """A `PropertySpec` paired with a resolved (already-scaled) value."""
+
+    spec: PropertySpec
+    value: Any
+
+
+def resolve(
+    field_names: Iterable[str],
+    values: dict,
+    mapping: dict,
+    *,
+    fallback: Optional[Callable[[str], Optional[PropertySpec]]] = None,
+) -> list:
+    """Resolve source fields to `PropertySpec`s and values: explicit mapping, then fallback.
+
+    For each field name: look it up in `mapping` (a `{field: PropertySpec}` dict);
+    if absent and `fallback` is given, call `fallback(field)` for a spec; if still
+    unresolved, the field is held (skipped). The value from `values` is multiplied
+    by the spec's `scale` (numeric, non-bool values only). Duplicate field names
+    resolve once. Returns a list of `ResolvedProperty`.
+
+    This is the two-tier mapping mechanism: a hand-authored `mapping` wins, and a
+    generic `fallback` (e.g. `ebus_sdk.ha.derive_spec` over discovered components)
+    fills the gaps. Feed the result to `build_from_declarations` via
+    `specs_and_values`.
+    """
+    resolved: list = []
+    seen: set = set()
+    for field_name in field_names:
+        if field_name in seen:
+            continue
+        seen.add(field_name)
+        spec = mapping.get(field_name)
+        if spec is None and fallback is not None:
+            spec = fallback(field_name)
+        if spec is None:
+            continue
+        value = values.get(field_name)
+        if value is not None and spec.scale != 1.0 and isinstance(value, (int, float)) and not isinstance(value, bool):
+            value = value * spec.scale
+        resolved.append(ResolvedProperty(spec, value))
+    return resolved
+
+
+def specs_and_values(resolved: Iterable[ResolvedProperty]) -> tuple:
+    """Split a `resolve` result into `(specs, values)` for `build_from_declarations`.
+
+    `values` is `{(capability, prop_id): value}` and omits entries whose value is
+    None (declared-but-not-yet-observed properties still appear in `specs`).
+    """
+    resolved = list(resolved)
+    specs = [r.spec for r in resolved]
+    values = {(r.spec.capability, r.spec.prop_id): r.value for r in resolved if r.value is not None}
+    return specs, values

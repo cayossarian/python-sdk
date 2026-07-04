@@ -52,17 +52,20 @@ from .adapter import (
     set_homie_property_from_python_property,
 )
 
-# Declarative property specs + builder (see doc/building-a-proxy.md)
+# Declarative property specs + builder + resolver (see doc/building-a-proxy.md)
 from .declaration import (
     PropertySpec,
+    ResolvedProperty,
     build_from_declarations,
     python_type_for,
+    resolve,
+    specs_and_values,
 )
 
 # MQTT client
 from ebus_mqtt_client import MqttClient
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     # Homie classes
@@ -95,10 +98,13 @@ __all__ = [
     # Proxy / adapter helpers
     "set_homie_property_from_python_property",
     "bind_property_to_homie",
-    # Declarative specs + builder
+    # Declarative specs + builder + resolver
     "PropertySpec",
+    "ResolvedProperty",
     "build_from_declarations",
     "python_type_for",
+    "resolve",
+    "specs_and_values",
     # MQTT
     "MqttClient",
 ]

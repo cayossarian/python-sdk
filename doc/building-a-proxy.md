@@ -68,6 +68,7 @@ homie.Property.set_value(...)  ──►  MQTT (ebus/5/<device>/<node>/<property
 
 - `PropertySpec`: the declaration for one property (its `capability`/node, `prop_id`, `datatype`, `unit`, `scale`, `settable`). The schema layer, complementary to the observable `Property` (which holds the live value).
 - `build_from_declarations(device, model, specs, ...)`: materializes a set of `PropertySpec`s into a live device in one call: one Homie node per capability, an observable `Property` plus a Homie property per spec, and the on-change binding between them, all inside one `state_transition()`. Returns the `{(capability, prop_id): homie.Property}` map.
+- `resolve(field_names, values, mapping, *, fallback=...)`: the two-tier mapping mechanism. Turns source fields into `PropertySpec`s (and scaled values) using a hand-authored `mapping` first, then a generic `fallback` for the rest (e.g. `ebus_sdk.ha.derive_spec` over discovered components). `specs_and_values(resolved)` splits the result straight into the `specs` and `values=` that `build_from_declarations` wants.
 - `set_homie_property_from_python_property(homie_property, python_property)`: the low-level on-change mirror (copies an observable property's value onto its Homie twin).
 - `bind_property_to_homie(properties, group, property_id, homie_property)`: registers that mirror as a `GroupedPropertyDict` on-change callback. `build_from_declarations` calls it for you; use it directly when you build the tree yourself.
 
@@ -107,7 +108,29 @@ A common proxy source is a device that already publishes Home Assistant MQTT dis
 - `ebus_sdk.ha.parse_device_config(payload)` parses a `homeassistant/device/<id>/config` message into a neutral `HADevice` (device metadata plus `HAComponent`s), handling abbreviated keys, the `~` base-topic macro, `value_template` field recovery, availability, and removal messages.
 - `ebus_sdk.ha.derive_spec(device_class, unit_of_measurement, field_name)` turns a component's HA `device_class` + `unit_of_measurement` into a `PropertySpec` (best-effort eBus datatype / unit / scale).
 
-So the HA front door is: subscribe the discovery topics, `parse_device_config` each one, resolve its components to `PropertySpec`s (map the fields you know explicitly, fall back to `derive_spec` for the rest), then `build_from_declarations` them. See [`doc/ha-mqtt-discovery.md`](ha-mqtt-discovery.md) for the discovery format. The reverse direction (emitting HA discovery from a Homie device) is planned; it reuses the same neutral `HADevice` model.
+Two mappers cooperate here, and the distinction matters:
+
+- **The domain-specific mapper** is a hand-authored `{source_field: PropertySpec}` table for one device family (for example an EKM meter). It is authoritative and encodes knowledge the generic HA metadata cannot carry: the exact eBus capability and property name, the canonical unit, and any `scale`. For instance an EKM `kWh_Tot` maps to `meter` / `imported-energy` in `Wh` with `scale=1000`, and per-phase fields get the spec's `-a` / `-b` / `-c` suffixes. You write one of these per device family; it is the part that makes the output spec-correct.
+- **The general HA mapper** is `ebus_sdk.ha.derive_spec`. It infers a `PropertySpec` purely from a component's HA `device_class` + `unit_of_measurement`, vendor-neutrally and best-effort (the property id is just the sanitized source field name). It knows nothing about any particular device; it only knows what Home Assistant's discovery metadata says.
+
+`resolve` combines them with a fixed precedence: **the domain-specific mapper wins per field; the general HA mapper fills the gaps; a field with neither an explicit entry nor a usable HA hint is held (dropped, never guessed).** So the fields you know come out spec-correct, and the long tail is still covered straight from the discovery metadata. The domain-specific mapper is the `mapping` argument; the general HA mapper is the `fallback`:
+
+```python
+from ebus_sdk import resolve, specs_and_values, build_from_declarations
+from ebus_sdk.ha import derive_spec
+
+def ha_fallback(components_by_field):
+    def _fb(field):
+        c = components_by_field.get(field)
+        return derive_spec(c.device_class, c.unit_of_measurement, c.value_field or field) if c else None
+    return _fb
+
+resolved = resolve(field_names, values, MY_EXPLICIT_MAP, fallback=ha_fallback(components_by_field))
+specs, seed = specs_and_values(resolved)
+build_from_declarations(device, model, specs, values=seed)
+```
+
+See [`doc/ha-mqtt-discovery.md`](ha-mqtt-discovery.md) for the discovery format. The reverse direction (emitting HA discovery from a Homie device) is planned; it reuses the same neutral `HADevice` model.
 
 ## Static vs dynamic device shape
 
