@@ -84,6 +84,35 @@ Children may have children of their own. A single Last Will registered on the ro
 
 `$description` republishes are minimized: structural changes made inside one `state_transition()` collapse to a single consolidated publish at exit (not one per `add_node`), and `publish_description()` is a no-op when the description content (ignoring its `version` timestamp) is unchanged — so a `state_transition()` that changes nothing structural does not re-emit the (potentially multi-KB) `$description`. A reconnect always republishes regardless, to restore retained state. Note this suppresses the redundant `$description` payload, not the `$state` `init`→`ready` edge of an empty transition.
 
+### Building a Proxy or Adapter
+
+To publish a device whose state changes over time (a proxy for a non-eBus device, an adapter for a local device, a gateway/bridge), use the **observable-model pattern**: keep the device's live state in a `GroupedPropertyDict` of observable `Property` objects, and mirror each change onto the Homie tree with a per-property on-change callback. Your acquisition code only updates the model; publishing to MQTT is an automatic side-effect.
+
+```python
+from ebus_sdk import (
+    Device, PropertyDatatype, Unit,
+    GroupedPropertyDict, ObservableProperty, bind_property_to_homie,
+)
+
+# Observable model (Homie-agnostic)
+model = GroupedPropertyDict()
+model.add_property('meter', ObservableProperty(id='active-power', type=float))
+
+# Homie device + property
+device = Device('my-meter', type='energy.ebus.device.submeter', mqtt_cfg={...})
+device.start_mqtt_client()
+with device.state_transition():
+    node = device.add_node_from_dict({'id': 'meter', 'type': 'energy.ebus.capability.meter'})
+    homie_prop = node.add_property_from_dict(
+        {'id': 'active-power', 'datatype': PropertyDatatype.FLOAT, 'unit': Unit.WATT})
+
+# Bind: a model change now publishes to MQTT automatically
+bind_property_to_homie(model, 'meter', 'active-power', homie_prop)
+model.set_value('meter', 'active-power', 1850.0)
+```
+
+**If you are building a proxy, read [`doc/building-a-proxy.md`](doc/building-a-proxy.md) first.** It is the comprehensive guide: declarative property definitions, the bridge-root plus proxied-children topology, dynamic device shapes, settable/bidirectional properties, and the anti-pattern to avoid (driving `homie.Device` directly from your data path). `examples/utility-meter` is the fullest worked example.
+
 ### Controller Role
 
 Discover and monitor Homie devices:
@@ -143,7 +172,8 @@ subscribed or dropped on the parent's next init→ready transition.
 src/ebus_sdk/
 ├── __init__.py     # Package exports
 ├── homie.py        # Homie convention implementation (Device, Node, Property, Controller, ...)
-└── property.py     # Application-level property abstractions
+├── property.py     # Observable application-state model (Property, GroupedPropertyDict)
+└── adapter.py      # Proxy/adapter helpers that mirror the model onto Homie
 ```
 
 MQTT transport lives in the separate [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client) package; this SDK depends on it.
@@ -164,12 +194,19 @@ Core Homie convention implementation:
 
 ### property.py
 
-Application-level property abstractions for bridging application state to Homie:
+The observable application-state model used to build proxies and adapters (see [`doc/building-a-proxy.md`](doc/building-a-proxy.md)):
 
 - **Property** - Thread-safe observable property with change callbacks
-- **GroupedPropertyDict** - Two-level dictionary organizing properties by group
+- **GroupedPropertyDict** - Two-level dictionary organizing properties by group (one group per Homie node)
 - **PropertyDict** - Simple property dictionary
 - **ChangeEvent** - Enum for property change event types
+
+### adapter.py
+
+Helpers that mirror the observable model onto the Homie tree, so you never hand-roll the bridge:
+
+- **set_homie_property_from_python_property** - on-change callback that copies an observable property's value to its Homie twin
+- **bind_property_to_homie** - one-call convenience that registers that callback for a `(group, property_id)`
 
 ## Examples
 

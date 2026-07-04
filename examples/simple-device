@@ -12,6 +12,7 @@ import threading
 import sys
 import uuid
 from ebus_sdk import Device, Node, Property, DeviceState, PropertyDatatype, Unit
+from ebus_sdk import set_homie_property_from_python_property
 from ebus_sdk.property import Property, GroupedPropertyDict
 from ebus_sdk import homie  # For datatype_from_type and constants
 from ebus_sdk.homie import EBUS_HOMIE_DOMAIN, EBUS_HOMIE_VERSION_MAJOR
@@ -71,16 +72,9 @@ class ExampleDevice:
         return self._props.as_dict()
 
 
-def set_homie_property_from_property(
-    homie_property: homie.Property, prop: Property
-) -> bool:
-    """
-    Used as a callback for a Property.
-
-    The Property's callback returns the Property,
-    and this function sets the homie.Property's value to the value of the Property.
-    """
-    return homie_property.set_value(prop.value())
+# The on-change mirror is provided by the SDK as
+# ebus_sdk.set_homie_property_from_python_property (see doc/building-a-proxy.md);
+# bind_property_to_homie() wraps the whole callback registration in one call.
 
 
 class ExampleDeviceAdapter:
@@ -206,7 +200,7 @@ class ExampleDeviceAdapter:
             self._example_device.add_property_on_change_callback(
                 group,
                 py_property_id,
-                partial(set_homie_property_from_property, homie_property),
+                partial(set_homie_property_from_python_property, homie_property),
             )
         return homie_node
 

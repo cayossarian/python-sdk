@@ -46,10 +46,16 @@ from .property import (
     BulkUpdateContext,
 )
 
+# Proxy / adapter helpers (see doc/building-a-proxy.md)
+from .adapter import (
+    bind_property_to_homie,
+    set_homie_property_from_python_property,
+)
+
 # MQTT client
 from ebus_mqtt_client import MqttClient
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 __all__ = [
     # Homie classes
@@ -79,6 +85,9 @@ __all__ = [
     "PropertyDict",
     "ChangeEvent",
     "BulkUpdateContext",
+    # Proxy / adapter helpers
+    "set_homie_property_from_python_property",
+    "bind_property_to_homie",
     # MQTT
     "MqttClient",
 ]

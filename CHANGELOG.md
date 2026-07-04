@@ -4,6 +4,13 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-03
+
+### Added
+
+- First-class proxy/adapter helpers, exported from `ebus_sdk`: `set_homie_property_from_python_property(homie_property, python_property)` (the on-change mirror that copies an observable `Property`'s value onto its Homie twin) and `bind_property_to_homie(properties, group, property_id, homie_property)` (a one-call wrapper that registers that callback). Every eBus proxy previously hand-rolled the mirror function; it is now shipped and canonical, in the new module `src/ebus_sdk/adapter.py`.
+- `doc/building-a-proxy.md`: a comprehensive guide to the observable-model pattern for building proxies and adapters, covering declarative property definitions, the `GroupedPropertyDict` model, the adapter mirror, the bridge-root plus proxied-children topology, static vs dynamic device shape, settable/bidirectional properties, and the anti-pattern of driving `homie.Device` directly from the acquisition path. The pattern was not discoverable from the SDK's docs, so it is now cross-linked from the README ("Building a Proxy or Adapter"), the `property.py` module docstring, and the examples. `examples/simple-device` now uses the exported helper instead of a local copy.
+
 ## [0.4.1] — 2026-07-01
 
 ### Fixed
