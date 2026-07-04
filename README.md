@@ -113,6 +113,8 @@ model.set_value('meter', 'active-power', 1850.0)
 
 **If you are building a proxy, read [`doc/building-a-proxy.md`](doc/building-a-proxy.md) first.** It is the comprehensive guide: declarative property definitions, the bridge-root plus proxied-children topology, dynamic device shapes, settable/bidirectional properties, and the anti-pattern to avoid (driving `homie.Device` directly from your data path). `examples/utility-meter` is the fullest worked example.
 
+**Home Assistant interop** is covered by two `ebus_sdk.ha` guides: [`doc/ha-mqtt-discovery.md`](doc/ha-mqtt-discovery.md) parses HA MQTT discovery INTO eBus, and [`doc/ha-discovery-bridge.md`](doc/ha-discovery-bridge.md) emits eBus OUT to HA via `HaDiscoveryBridge` (per-device mapping, an eBus-aware customizer, and HA <-> eBus loop-avoidance guards). `examples/ha-discovery-bridge` is a live-broker, no-HASS-needed demo.
+
 ### Controller Role
 
 Discover and monitor Homie devices:

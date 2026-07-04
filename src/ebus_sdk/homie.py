@@ -1038,8 +1038,9 @@ class Device:
         name: Optional[str] = None,
         type: Optional[str] = None,
         parent: Optional["Device"] = None,
-        nodes: Optional[List] = [],
-        extensions: Optional[List] = [],
+        nodes: Optional[List] = None,
+        extensions: Optional[List] = None,
+        description_extras: Optional[dict] = None,
         mqtt_cfg: Optional[dict] = None,
         qos: int = EBUS_HOMIE_MQTT_QOS,
     ):
@@ -1065,7 +1066,16 @@ class Device:
         self._children: List[Device] = []
         self._mqtt_cfg = mqtt_cfg if parent is None else None
         self._nodes = {}
-        self._extensions = extensions
+        # Copy into fresh lists so callers never share a mutable default across
+        # Device instances (and a later append can't leak between devices).
+        self._extensions = list(extensions) if extensions else []
+        # Extra top-level fields merged into the $description JSON document.
+        # Used to carry extension-defined device attributes (e.g. the
+        # `imported-from` attribute of the `energy.ebus.imported` extension).
+        # Homie 5 forward-compat requires controllers to ignore unknown
+        # description fields (convention §Forward compatibility), so these are
+        # safe; core fields always take precedence over an extra of the same key.
+        self._description_extras = dict(description_extras) if description_extras else {}
         # Counter of how many state_transition() / delete() scopes are currently active
         # on this device. >0 means "a transition is in progress" — suppresses child-induced
         # parent flaps and makes nested state_transition()s reentrant (only the outermost
@@ -1085,7 +1095,7 @@ class Device:
             parent._children.append(self)
         # Child's own INIT → publish description+nodes → READY (Homie add-child steps 1-3).
         with self.state_transition():
-            for node in nodes:
+            for node in nodes or []:
                 self.add_node(node)
         # Homie add-child steps 4-6: parent INIT → publish description (now includes self in
         # `children`) → READY. Skipped if parent is mid-transition — in that case the parent's
@@ -1238,6 +1248,9 @@ class Device:
             # Required if the parent is NOT the root device. Defaults to the value of the root property.
             description["parent"] = self._parent.id()
         description["extensions"] = self._extensions
+        # Merge extension-defined device attributes, never clobbering a core field.
+        for key, value in self._description_extras.items():
+            description.setdefault(key, value)
         return description
 
     def set_state(self, state: DeviceState) -> bool:

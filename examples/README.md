@@ -84,6 +84,18 @@ When SPAN-API utilities are available:
 - CA certificate is fetched/cached in `~/.span-ca-certs/` for secure TLS verification
 - Use `--insecure` to skip certificate verification even when CA cert is available
 
+### ha-discovery-bridge
+
+Bridges eBus/Homie devices to Home Assistant MQTT discovery (the reverse of the HA -> eBus path). Publishes a synthetic eBus device (meter / battery / settable control), runs a `Controller` + `HaDiscoveryBridge` that discovers it and emits `homeassistant/device/<id>/config`, then subscribes an independent client (standing in for Home Assistant) to capture and verify the emitted config, and finally shows the config being cleared on device removal. Runs against a real broker but needs no running Home Assistant. See [`doc/ha-discovery-bridge.md`](../doc/ha-discovery-bridge.md) for the full guide.
+
+```bash
+./ha-discovery-bridge --config /path/to/broker-cfg.json
+./ha-discovery-bridge                 # defaults to 127.0.0.1:1883, no auth
+./ha-discovery-bridge --keep-running  # leave it up for a real HA to consume
+```
+
+No broker handy? A throwaway local one works: `mosquitto -c <(printf 'listener 1883 127.0.0.1\nallow_anonymous true\n')`, then run with no `--config`.
+
 ## Configuration
 
 All examples accept broker configuration via:

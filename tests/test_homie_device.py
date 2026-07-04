@@ -1689,3 +1689,29 @@ class TestPropertyDatatypeEnum:
         assert PropertyDatatype.STRING.value == "string"
         assert PropertyDatatype.ENUM.value == "enum"
         assert PropertyDatatype.JSON.value == "json"
+
+
+class TestDeviceDescriptionExtras:
+    """extensions list + custom $description fields (SDK-dn4 imported-from support)."""
+
+    def test_extensions_default_empty_and_isolated(self, mock_paho):
+        # No shared mutable default: mutating one device's list never leaks.
+        d1, _ = _make_device(mock_paho, device_id="d1")
+        d2, _ = _make_device(mock_paho, device_id="d2")
+        assert d1.description()["extensions"] == []
+        d1._extensions.append("x")
+        assert d2.description()["extensions"] == []
+
+    def test_extensions_listed_in_description(self, mock_paho):
+        d, _ = _make_device(mock_paho, extensions=["energy.ebus.imported:1.0.0:[5.x]"])
+        assert d.description()["extensions"] == ["energy.ebus.imported:1.0.0:[5.x]"]
+
+    def test_description_extras_merged(self, mock_paho):
+        d, _ = _make_device(mock_paho, description_extras={"imported-from": "ha"})
+        assert d.description()["imported-from"] == "ha"
+
+    def test_description_extras_never_clobber_core_fields(self, mock_paho):
+        d, _ = _make_device(mock_paho, description_extras={"name": "HACKED", "nodes": {"x": {}}})
+        desc = d.description()
+        assert desc["name"] != "HACKED"  # core name wins over an extra of the same key
+        assert desc["nodes"] == {}  # core nodes win

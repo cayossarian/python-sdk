@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Bridge eBus/Homie devices to Home Assistant MQTT discovery (SDK-dn4).
+
+End-to-end demonstration and self-check for `ebus_sdk.ha.HaDiscoveryBridge`,
+against a REAL broker but WITHOUT needing a running Home Assistant. It:
+
+  1. publishes a synthetic eBus device (a meter + battery + a settable control)
+     onto the broker (device role),
+  2. runs a Controller + HaDiscoveryBridge that discovers it and emits Home
+     Assistant discovery (controller role),
+  3. subscribes an INDEPENDENT MQTT client to `homeassistant/device/+/config`
+     (standing in for Home Assistant) and prints/verifies the emitted config,
+  4. removes the device and shows the discovery config being cleared.
+
+This is the "live broker, no HASS" verification tier from
+`doc/ha-discovery-bridge.md`: it proves the exact topics/messages the bridge
+publishes. Home Assistant only adds "and HA renders entities" on top.
+
+Usage:
+    ./ha-discovery-bridge --config /path/to/broker-cfg.json
+    ./ha-discovery-bridge                 # defaults to 127.0.0.1:1883, no auth
+    ./ha-discovery-bridge --keep-running  # leave it up for a real HA to consume
+
+Need a local broker? See examples/README.md (broker-quickstart).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+from ebus_sdk import (
+    Controller,
+    Device,
+    GroupedPropertyDict,
+    MqttClient,
+    PropertyDatatype,
+    PropertySpec,
+    Unit,
+    build_from_declarations,
+)
+from ebus_sdk.ha import (
+    ebus_default_override,
+    parse_device_config,
+)
+
+DEVICE_ID = "ha-bridge-demo"
+DEVICE_NAME = "HA Bridge Demo Panel"
+DEVICE_TYPE = "energy.ebus.device.demo"
+
+# The synthetic device's declarative shape: a meter node, a battery node, and a
+# settable control. build_from_declarations turns these into Homie nodes +
+# properties (node types become energy.ebus.capability.<capability>).
+SPECS = [
+    PropertySpec("meter", "imported-energy", PropertyDatatype.FLOAT, Unit.WATT_HOUR),
+    PropertySpec("meter", "active-power", PropertyDatatype.FLOAT, Unit.WATT),
+    PropertySpec("battery", "soc", PropertyDatatype.FLOAT, Unit.PERCENT),
+    PropertySpec("control", "enabled", PropertyDatatype.BOOLEAN, settable=True),
+]
+VALUES = {
+    ("meter", "imported-energy"): 12345.6,
+    ("meter", "active-power"): 800.0,
+    ("battery", "soc"): 55.0,
+    ("control", "enabled"): False,
+}
+
+
+def load_broker_config(config_file):
+    if not config_file:
+        # No config: default to a local unauthenticated broker.
+        host = os.environ.get("EBUS_MQTT_HOST", "127.0.0.1")
+        port = int(os.environ.get("EBUS_MQTT_PORT", "1883"))
+        print(f"No --config given; using default broker {host}:{port}")
+        return {"host": host, "port": port}
+    with open(config_file, "r") as fp:
+        return json.load(fp)
+
+
+def publish_synthetic_device(mqtt_cfg):
+    """Stand up the synthetic eBus device on the broker (device role)."""
+    device = Device(DEVICE_ID, name=DEVICE_NAME, type=DEVICE_TYPE, mqtt_cfg=mqtt_cfg)
+    device.start_mqtt_client()
+    model = GroupedPropertyDict()
+    build_from_declarations(device, model, SPECS, values=VALUES)
+    print(f"Published synthetic device '{DEVICE_ID}' ({len(SPECS)} properties across meter/battery/control)")
+    return device
+
+
+def make_ha_consumer(mqtt_cfg, captured):
+    """An independent MQTT client subscribed to the HA discovery topics.
+
+    Stands in for Home Assistant: captures every retained config the bridge
+    publishes into `captured` ({topic: payload_str}).
+    """
+
+    def on_config(topic, payload):
+        text = payload.decode() if isinstance(payload, (bytes, bytearray)) else payload
+        captured[topic] = text
+
+    consumer = MqttClient.from_config(mqtt_cfg, client_id="ha-consumer-demo")
+    consumer.start(blocking=False)
+    time.sleep(0.5)
+    consumer.subscribe("homeassistant/device/+/config", param=on_config, qos=1)
+    return consumer
+
+
+def verify(config):
+    """Check the emitted config carries what we expect; print PASS/FAIL lines."""
+    ok = True
+
+    def check(label, condition):
+        nonlocal ok
+        ok = ok and condition
+        print(f"  [{'PASS' if condition else 'FAIL'}] {label}")
+
+    cmps = config.get("components", {})
+    check("device identifiers include the device id", DEVICE_ID in config.get("device", {}).get("identifiers", []))
+    check("origin marks it as ebus-sdk (loop-avoidance guard A)", config.get("origin", {}).get("name") == "ebus-sdk")
+    check("availability derives from the $state topic", "$state" in config.get("availability_topic", ""))
+    check(
+        "meter/imported-energy -> energy + total_increasing (eBus customizer)",
+        cmps.get("meter_imported-energy", {}).get("state_class") == "total_increasing",
+    )
+    check(
+        "battery/soc -> battery device_class (resolves ambiguous %)",
+        cmps.get("battery_soc", {}).get("device_class") == "battery",
+    )
+    check(
+        "settable control/enabled -> switch with a command_topic",
+        cmps.get("control_enabled", {}).get("platform") == "switch"
+        and cmps.get("control_enabled", {}).get("command_topic", "").endswith("/control/enabled/set"),
+    )
+    return ok
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Bridge a synthetic eBus device to Home Assistant MQTT discovery")
+    parser.add_argument("-c", "--config", help="Broker config JSON (or EBUS_BROKER_CFG env var)")
+    parser.add_argument("--keep-running", action="store_true", help="Keep bridging (for a real HA to consume)")
+    args = parser.parse_args()
+
+    mqtt_cfg = load_broker_config(args.config or os.environ.get("EBUS_BROKER_CFG"))
+
+    print("=" * 68)
+    print("HA Discovery Bridge Example")
+    print("=" * 68)
+
+    # 1. Independent HA-consumer subscription (before anything is published).
+    captured = {}
+    consumer = make_ha_consumer(mqtt_cfg, captured)
+
+    # 2. Publish the synthetic eBus device.
+    device = publish_synthetic_device(mqtt_cfg)
+
+    # 3. Controller + bridge. The eBus-aware customizer is the default mapping;
+    #    per-device overrides could be added via overrides=/override_for=.
+    controller = Controller(mqtt_cfg=mqtt_cfg)
+    from ebus_sdk.ha import HaDiscoveryBridge  # imported here to keep the header tidy
+
+    bridge = HaDiscoveryBridge(controller, default_override=ebus_default_override)
+    bridge.start()
+    controller.start_discovery()
+
+    # 4. Let discovery + emit settle, then show/verify what HA would receive.
+    print("\nWaiting for discovery and HA discovery emit ...")
+    time.sleep(3.0)
+
+    topic = f"homeassistant/device/{DEVICE_ID}/config"
+    if topic not in captured or not captured[topic]:
+        print(f"\nNo discovery config captured on {topic}.")
+        print("Is the broker reachable, and did the device announce? Try again or check --config.")
+        _shutdown(bridge, controller, consumer, device)
+        sys.exit(1)
+
+    config = json.loads(captured[topic])
+    print(f"\nHome Assistant would receive on {topic}:\n")
+    print(json.dumps(config, indent=2, ensure_ascii=False))
+
+    # Round-trip sanity: our own parser reads back what we emitted.
+    reparsed = parse_device_config(config)
+    print(f"\nRound-trips through parse_device_config: {reparsed.name} with {len(reparsed.components)} components")
+
+    print("\nVerification:")
+    ok = verify(config)
+
+    if args.keep_running:
+        print("\n--keep-running: leaving the bridge up. Ctrl-C to stop.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+    else:
+        # 5. Remove the device; the bridge clears the discovery config. A Homie
+        #    device removes itself by publishing an empty retained $state (the
+        #    Controller's removal signal); delete_all_from_mqtt() then clears its
+        #    property/description topics.
+        print("\nRemoving the device (empty retained $state) ...")
+        device.mqttc.publish(f"ebus/5/{DEVICE_ID}/$state", "", retain=True, qos=1)
+        device.delete_all_from_mqtt()
+        time.sleep(2.0)
+        cleared = captured.get(topic, None) == ""
+        print(f"  [{'PASS' if cleared else 'FAIL'}] discovery config cleared (empty retained payload)")
+        ok = ok and cleared
+
+    _shutdown(bridge, controller, consumer, device)
+    print("\n" + ("All checks passed." if ok else "Some checks FAILED."))
+    sys.exit(0 if ok else 1)
+
+
+def _shutdown(bridge, controller, consumer, device):
+    try:
+        bridge.stop()
+    except Exception:
+        pass
+    for client in (getattr(controller, "mqttc", None), consumer, getattr(device, "mqttc", None)):
+        try:
+            if client:
+                client.stop()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    main()
