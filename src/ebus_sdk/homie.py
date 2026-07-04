@@ -1338,8 +1338,19 @@ class Device:
 
     def delete_all_from_mqtt(self) -> None:
         """
-        Delete entire device from MQTT broker: all nodes, properties, and description.
-        Used for clean shutdown. Does NOT republish anything, does NOT publish node descriptions.
+        Clear this device's retained property values and $description from the broker.
+
+        A low-level data-cleanup helper: it clears every published property value and
+        the $description topic, but deliberately does NOT touch $state, so on its own it
+        is NOT a device-removal or shutdown method:
+
+          * to permanently REMOVE a device, use delete(), which additionally clears the
+            retained $state (the Homie removal signal) and detaches from the parent tree;
+          * for graceful SHUTDOWN, a client manages $state itself (set_state to
+            DISCONNECTED, or rely on the LWT publishing $state=lost), typically leaving
+            retained values in place so consumers recover state across a restart.
+
+        Does NOT republish anything and does NOT publish node descriptions.
         """
         logger.info(f"reason=deviceDeleteAllFromMqtt,deviceId={self._id}")
 

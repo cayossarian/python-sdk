@@ -194,13 +194,13 @@ def main():
         except KeyboardInterrupt:
             pass
     else:
-        # 5. Remove the device; the bridge clears the discovery config. A Homie
-        #    device removes itself by publishing an empty retained $state (the
-        #    Controller's removal signal); delete_all_from_mqtt() then clears its
-        #    property/description topics.
-        print("\nRemoving the device (empty retained $state) ...")
-        device.mqttc.publish(f"ebus/5/{DEVICE_ID}/$state", "", retain=True, qos=1)
-        device.delete_all_from_mqtt()
+        # 5. Remove the device; the bridge clears the discovery config. Device.delete()
+        #    is the Homie removal path: it clears the property and $description topics
+        #    AND the retained $state (the Controller's removal signal). This is distinct
+        #    from a graceful shutdown, where a client instead sets $state (disconnected,
+        #    or lost via the LWT) and leaves retained values in place for restart recovery.
+        print("\nRemoving the device (Device.delete) ...")
+        device.delete()
         time.sleep(2.0)
         cleared = captured.get(topic, None) == ""
         print(f"  [{'PASS' if cleared else 'FAIL'}] discovery config cleared (empty retained payload)")
