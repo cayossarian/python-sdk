@@ -175,7 +175,9 @@ src/ebus_sdk/
 ├── __init__.py     # Package exports
 ├── homie.py        # Homie convention implementation (Device, Node, Property, Controller, ...)
 ├── property.py     # Observable application-state model (Property, GroupedPropertyDict)
-└── adapter.py      # Proxy/adapter helpers that mirror the model onto Homie
+├── adapter.py      # Proxy/adapter helpers that mirror the model onto Homie
+├── declaration.py  # Declarative PropertySpec + build_from_declarations + resolve
+└── ha/             # Home Assistant MQTT discovery interop (parse in, emit out)
 ```
 
 MQTT transport lives in the separate [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client) package; this SDK depends on it.
@@ -209,6 +211,23 @@ Helpers that mirror the observable model onto the Homie tree, so you never hand-
 
 - **set_homie_property_from_python_property** - on-change callback that copies an observable property's value to its Homie twin
 - **bind_property_to_homie** - one-call convenience that registers that callback for a `(group, property_id)`
+
+### declaration.py
+
+The declarative "schema" layer for proxies (see [`doc/building-a-proxy.md`](doc/building-a-proxy.md)):
+
+- **PropertySpec** - declares one eBus property (capability/node, id, datatype, unit, scale, settable)
+- **build_from_declarations** - materializes a set of specs into Homie nodes/properties, the observable model, and their bindings in one call
+- **resolve** / **specs_and_values** / **ResolvedProperty** - the two-tier mapping (hand-authored `mapping` first, generic `fallback` for the rest) that turns source fields into specs and scaled values
+
+### ha/
+
+Home Assistant MQTT discovery interop, both directions (see [`doc/ha-mqtt-discovery.md`](doc/ha-mqtt-discovery.md) and [`doc/ha-discovery-bridge.md`](doc/ha-discovery-bridge.md)):
+
+- **Parse (HA -> eBus)** - `parse_device_config` into the neutral `HADevice` / `HAComponent` model; `derive_spec` / `unit_for` map a component's `device_class` / `unit` to an eBus `PropertySpec`
+- **Emit (eBus -> HA)** - `homie_description_to_ha` / `homie_device_to_ha` / `to_config` serialize a Homie device into HA discovery config; `ebus_default_override` adds eBus-capability-aware metadata
+- **HaDiscoveryBridge** - controller-role runtime that discovers eBus devices and publishes/clears their HA discovery topics, with per-device mapping and graceful `stop()` vs permanent `clear_all()`
+- **Loop avoidance** - `is_ebus_sdk_origin` (origin self-echo) and the `energy.ebus.imported` extension + `imported-from` attribute (`is_imported` / `imported_source`) to prevent a HA <-> eBus round-trip echo
 
 ## Examples
 
