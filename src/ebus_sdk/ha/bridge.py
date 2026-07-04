@@ -18,6 +18,11 @@ discovers into Home Assistant MQTT discovery. The translation core lives in
     it recognizes as its own (by origin), never Home Assistant's or another
     integration's. The bridge is also a context manager, so a `with` block
     guarantees `stop()` (and `clear_on_stop`, if set) runs on exit.
+  - shutdown mirrors the device lifecycle: `stop()` is graceful (it LEAVES the
+    published configs so HA keeps the entities across a bridge restart), while
+    `clear_all()` is permanent retirement (it removes every config the bridge
+    published, so HA drops those devices). `clear_all()` is to the bridge what
+    `Device.delete()` is to a device.
 
 Which devices, and which mapping per device:
   - `include` (allowlist of device ids) and `device_filter` (predicate) select
@@ -184,9 +189,17 @@ class HaDiscoveryBridge:
     def stop(self) -> None:
         """Unwire the bridge, restoring the Controller's prior callbacks.
 
-        If `clear_on_stop` was set, first clears every discovery config this
-        bridge published (empty retained payload). Cancels a pending reconcile
-        timer and unsubscribes the discovery-config observer. Idempotent.
+        Graceful shutdown: it does NOT remove the discovery configs it published,
+        so Home Assistant keeps the exported entities across a bridge restart
+        (they read values directly from the `ebus/` topics and work while the
+        bridge is down). Cancels a pending reconcile timer and unsubscribes the
+        discovery-config observer. Idempotent.
+
+        For a PERMANENT retirement (make Home Assistant drop the exported
+        devices), call `clear_all()` before/at stop, or construct with
+        `clear_on_stop=True` (which routes through `clear_all()` here). This
+        mirrors the device side: `stop()` is like leaving `$state` retained,
+        `clear_all()` is like `Device.delete()`.
         """
         if not self._started:
             return
@@ -197,12 +210,28 @@ class HaDiscoveryBridge:
         if mqttc is not None and hasattr(mqttc, "unsubscribe"):
             mqttc.unsubscribe(_config_wildcard(self.discovery_prefix))
         if self._clear_on_stop:
-            for device_id in list(self._published):
-                self._clear_device(device_id)
+            self.clear_all()
         self.controller.set_on_description_received_callback(self._prev_description)
         self.controller.set_on_device_state_changed_callback(self._prev_state_changed)
         self.controller.set_on_device_removed_callback(self._prev_removed)
         self._started = False
+
+    def clear_all(self) -> int:
+        """Remove every HA discovery config this bridge published (permanent).
+
+        Publishes an empty retained payload to each config topic this bridge
+        currently tracks, so Home Assistant drops those devices. Use for a
+        permanent bridge retirement (this bridge and its exported devices are
+        going away). For a routine restart prefer a plain `stop()`, which leaves
+        the configs so HA keeps the entities. This is the bridge analog of
+        `Device.delete()`; `stop()` is the analog of a graceful device shutdown.
+        Returns the number of configs cleared. Does not unwire the bridge.
+        """
+        count = 0
+        for device_id in list(self._published):
+            self._clear_device(device_id)
+            count += 1
+        return count
 
     # -- selection + mapping resolution --------------------------------------
 

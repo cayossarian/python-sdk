@@ -284,6 +284,33 @@ def test_clear_on_stop_clears_published(mock_paho):
     assert clears == [("homeassistant/device/panel-1/config", "")]
 
 
+def test_clear_all_removes_published_without_unwiring(mock_paho):
+    ctrl, mock_client = _make_controller(mock_paho)
+    bridge = HaDiscoveryBridge(ctrl, reconcile_after=None)
+    bridge.start()
+    ctrl.start_discovery()
+    _discover(ctrl, "panel-1")
+    _discover(ctrl, "panel-2")
+    assert bridge.clear_all() == 2
+    clears = {t for t, p, _ in _ha_publishes(mock_client) if p == ""}
+    assert clears == {"homeassistant/device/panel-1/config", "homeassistant/device/panel-2/config"}
+    # Still wired: a later discovery still publishes.
+    assert bridge._started
+    _discover(ctrl, "panel-3")
+    assert "homeassistant/device/panel-3/config" in {t for t, p, _ in _ha_publishes(mock_client) if p != ""}
+
+
+def test_stop_leaves_configs_by_default(mock_paho):
+    ctrl, mock_client = _make_controller(mock_paho)
+    bridge = HaDiscoveryBridge(ctrl, reconcile_after=None)
+    bridge.start()
+    ctrl.start_discovery()
+    _discover(ctrl, "panel-1")
+    bridge.stop()
+    # Graceful stop: nothing cleared, so HA keeps the entity across a restart.
+    assert [p for _, p, _ in _ha_publishes(mock_client) if p == ""] == []
+
+
 def test_context_manager_starts_and_stops(mock_paho):
     ctrl, mock_client = _make_controller(mock_paho)
     ctrl.start_discovery()
