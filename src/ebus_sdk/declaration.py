@@ -17,6 +17,7 @@ state transition. Acquisition code then only calls
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable, Iterable, Optional
 
 from .adapter import bind_property_to_homie
@@ -50,6 +51,12 @@ class PropertySpec:
     kWh -> Wh is 1000); it is metadata for a caller's mapping/resolver and is NOT
     applied by the builder. `python_type` overrides the observable-`Property`
     type (otherwise derived from `datatype`).
+
+    `entity_setter` is the inbound-control translator for a settable property: a
+    `callable(value)` invoked when a `/set` command arrives. When `settable=True`
+    and `entity_setter` is given, `build_from_declarations` wires the whole
+    inbound path automatically (see there); a settable spec without an
+    `entity_setter` still gets a `/set` topic but no auto-wired handler.
     """
 
     capability: str
@@ -61,6 +68,7 @@ class PropertySpec:
     name: Optional[str] = None
     format: Optional[str] = None
     python_type: Any = None
+    entity_setter: Optional[Callable] = None
 
 
 def _default_node_type(capability: str) -> str:
@@ -80,10 +88,20 @@ def build_from_declarations(
 
     Groups `specs` by capability (one Homie node each) and, for every spec,
     creates an observable `Property` in `model` and a Homie property on the node,
-    wired together with `bind_property_to_homie`. Runs inside one
-    `device.state_transition()`. `values` (a `{(capability, prop_id): value}`
-    map) seeds initial values THROUGH the model after the structure is built, so
-    they publish via the bindings. Returns `{(capability, prop_id): homie.Property}`.
+    wired together with `bind_property_to_homie` (the outbound/report path). Runs
+    inside one `device.state_transition()`. `values` (a `{(capability, prop_id):
+    value}` map) seeds initial values THROUGH the model after the structure is
+    built, so they publish via the bindings. Returns
+    `{(capability, prop_id): homie.Property}`.
+
+    For a spec with `settable=True` AND an `entity_setter`, the inbound/control
+    path is wired automatically: the observable `Property`'s `entity_setter` is
+    registered on `model`, and the Homie property's `set_callback` is set to
+    `partial(model.set_entity, capability, prop_id)`, so an arriving `/set`
+    command routes `/set` payload -> `model.set_entity` -> the `entity_setter`.
+    The `/set` subscription itself is already established when the property is
+    added (`Node.add_property` -> `Property.set_subscribe`), so no `set_settable`
+    toggle is needed.
     """
     grouped: dict[str, list[PropertySpec]] = {}
     for spec in specs:
@@ -111,6 +129,12 @@ def build_from_declarations(
                     prop_dict["format"] = spec.format
                 homie_prop = node.add_property_from_dict(prop_dict)
                 bind_property_to_homie(model, capability, spec.prop_id, homie_prop)
+                # Inbound/control path for a settable property with a translator:
+                # /set payload -> model.set_entity -> entity_setter. The /set
+                # subscription is already live from add_property -> set_subscribe.
+                if spec.settable and spec.entity_setter is not None:
+                    model.set_entity_setter(capability, spec.prop_id, spec.entity_setter)
+                    homie_prop.set_set_callback(partial(model.set_entity, capability, spec.prop_id))
                 homie_props[(capability, spec.prop_id)] = homie_prop
 
     if values:

@@ -90,6 +90,47 @@ def test_build_from_declarations_creates_nodes_props_and_binds(mock_paho):
     assert homie_props[("meter", "active-power")].value() == 2000.0
 
 
+def test_build_from_declarations_wires_settable_entity_setter(mock_paho):
+    device = Device("dev-set", mqtt_cfg={"host": "localhost", "port": 1883})
+    device.start_mqtt_client()
+    model = GroupedPropertyDict()
+    received = []
+
+    specs = [
+        PropertySpec("dr", "event", PropertyDatatype.JSON, settable=True, entity_setter=lambda v: received.append(v)),
+    ]
+    homie_props = build_from_declarations(device, model, specs)
+    hp = homie_props[("dr", "event")]
+
+    # The property is settable and its /set topic was subscribed at build.
+    assert hp.settable() is True
+    set_subs = [c for c in mock_paho.subscribe.call_args_list if c.args and str(c.args[0]).endswith("/dr/event/set")]
+    assert set_subs, "settable property should subscribe to its /set topic at build"
+
+    # Homie set_callback routes an inbound /set: payload -> model.set_entity -> entity_setter.
+    cb = hp.get_set_callback()
+    assert cb is not None
+    cb('{"cmd": "shed"}')
+    assert received == ['{"cmd": "shed"}']
+
+    # The observable side is registered too: model.set_entity invokes the entity_setter.
+    model.set_entity("dr", "event", "OTHER")
+    assert received[-1] == "OTHER"
+
+
+def test_build_from_declarations_settable_without_entity_setter_not_auto_wired(mock_paho):
+    device = Device("dev-set2", mqtt_cfg={"host": "localhost", "port": 1883})
+    device.start_mqtt_client()
+    model = GroupedPropertyDict()
+    homie_props = build_from_declarations(
+        device, model, [PropertySpec("control", "enabled", PropertyDatatype.BOOLEAN, settable=True)]
+    )
+    hp = homie_props[("control", "enabled")]
+    # Still settable (topic exists), but no auto-wired handler without an entity_setter.
+    assert hp.settable() is True
+    assert hp.get_set_callback() is None
+
+
 def test_build_from_declarations_custom_node_type(mock_paho):
     device = Device("dev-2", mqtt_cfg={"host": "localhost", "port": 1883})
     device.start_mqtt_client()

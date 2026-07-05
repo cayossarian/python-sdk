@@ -66,7 +66,7 @@ homie.Property.set_value(...)  ──►  MQTT (ebus/5/<device>/<node>/<property
 
 `ebus_sdk` exports the whole layer so you never hand-roll it:
 
-- `PropertySpec`: the declaration for one property (its `capability`/node, `prop_id`, `datatype`, `unit`, `scale`, `settable`). The schema layer, complementary to the observable `Property` (which holds the live value).
+- `PropertySpec`: the declaration for one property (its `capability`/node, `prop_id`, `datatype`, `unit`, `scale`, `settable`, and an optional `entity_setter` for the inbound/control path). The schema layer, complementary to the observable `Property` (which holds the live value).
 - `build_from_declarations(device, model, specs, ...)`: materializes a set of `PropertySpec`s into a live device in one call: one Homie node per capability, an observable `Property` plus a Homie property per spec, and the on-change binding between them, all inside one `state_transition()`. Returns the `{(capability, prop_id): homie.Property}` map.
 - `resolve(field_names, values, mapping, *, fallback=...)`: the two-tier mapping mechanism. Turns source fields into `PropertySpec`s (and scaled values) using a hand-authored `mapping` first, then a generic `fallback` for the rest (e.g. `ebus_sdk.ha.derive_spec` over discovered components). `specs_and_values(resolved)` splits the result straight into the `specs` and `values=` that `build_from_declarations` wants.
 - `set_homie_property_from_python_property(homie_property, python_property)`: the low-level on-change mirror (copies an observable property's value onto its Homie twin).
@@ -157,13 +157,17 @@ Children share the root's single MQTT connection automatically (that is what `pa
 
 ## Settable / bidirectional properties (control back to the device)
 
-If eBus controllers should be able to command the proxied device (a relay, a setpoint, a DR event), wire the inbound path too:
+If eBus controllers should be able to command the proxied device (a relay, a setpoint, a DR event), declare the property `settable=True` and give it an `entity_setter`: a `callable(value)` that translates an incoming command into a device action. `build_from_declarations` wires the whole inbound path from that one declaration:
 
-1. Mark the declaration `settable=True` and name an `entity_setter` method that translates an incoming value into a device command.
-2. Give the **observable** `Property` that `entity_setter` (via `Property(..., entity_setter=...)` or `add_property_from_dict({"entity_setter": ...})`).
-3. Give the **Homie** property a `set_callback` that routes an inbound `/set` into the model: `set_callback = partial(properties.set_entity, group, property_id)` (or `set_property_entity`, depending on your model wrapper).
+```python
+PropertySpec("dr", "event", PropertyDatatype.JSON, settable=True, entity_setter=self._on_dr_event_set)
+```
 
-Inbound flow: MQTT `/set` -> Homie property `set_callback` -> `properties.set_entity(group, id, value)` -> your `entity_setter` -> device command. The outbound (report) path is unchanged: the device's real state updates the model, which mirrors back to Homie.
+For each settable spec that has an `entity_setter`, `build_from_declarations` registers the `entity_setter` on the observable model and sets the Homie property's `set_callback` to `partial(model.set_entity, capability, prop_id)`. The property's `/set` subscription is already established when the property is added, so no manual wiring or `set_settable` toggle is needed.
+
+Inbound flow: MQTT `/set` -> Homie property `set_callback` -> `model.set_entity(capability, prop_id, value)` -> your `entity_setter` -> device command. Your `entity_setter` actuates the device and, once the real state changes, writes it back with `model.set_value(...)`, which mirrors onto Homie via the outbound (report) path.
+
+If you build the tree by hand instead of via `build_from_declarations`, wire the same two seams yourself: `model.set_entity_setter(capability, prop_id, fn)` and `homie_property.set_set_callback(partial(model.set_entity, capability, prop_id))`.
 
 ## The anti-pattern (what not to do)
 
@@ -186,7 +190,7 @@ It works, and it is tempting because it is fewer lines at first. But it reinvent
 - [ ] Each property is bound with `bind_property_to_homie` (never a hand-rolled mirror).
 - [ ] A bridge root (`energy.ebus.device.bridge`) plus child devices named `{proxier-id}-{proxied-id}`.
 - [ ] Structural changes are batched; the device is connected before the first publish.
-- [ ] Settable properties (if any) are wired via `entity_setter` + `set_callback`.
+- [ ] Settable properties (if any) declare an `entity_setter` on their `PropertySpec` (auto-wired by `build_from_declarations`).
 - [ ] No raw `homie.Property` handles cached in your data path.
 
 ## Worked examples

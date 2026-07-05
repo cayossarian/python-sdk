@@ -4,6 +4,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `PropertySpec.entity_setter`: an optional `callable(value)` translator for a settable property's inbound/control path. When a spec is `settable=True` and carries an `entity_setter`, `build_from_declarations` now wires the whole inbound path automatically: it registers the `entity_setter` on the observable model and sets the Homie property's `set_callback` to `partial(model.set_entity, capability, prop_id)`, so an arriving `/set` routes payload -> `model.set_entity` -> `entity_setter`. The `/set` subscription is already established when the property is added, so no `set_settable` toggle is needed. This replaces the manual three-step post-build wiring (grab the Homie handle, `set_set_callback`, `set_entity_setter`) that proxies previously hand-rolled. `doc/building-a-proxy.md` §Settable / bidirectional properties now uses the declarative path.
+
 ### Changed
 
 - The `energy.ebus.imported` extension (introduced in 0.8.0) is now formally specified in the [Electrification Bus specification](https://github.com/electrification-bus/specification/blob/main/extensions/imported.md). `doc/ha-discovery-bridge.md` and the `ebus_sdk.ha.provenance` docstring link to it instead of describing the extension as provisional.
