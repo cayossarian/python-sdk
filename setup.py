@@ -16,7 +16,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="ebus-sdk",
-    version="0.8.0",
+    version="0.9.0",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
 )

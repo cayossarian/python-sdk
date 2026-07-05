@@ -4,6 +4,8 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-05
+
 ### Added
 
 - `PropertySpec.entity_setter`: an optional `callable(value)` translator for a settable property's inbound/control path. When a spec is `settable=True` and carries an `entity_setter`, `build_from_declarations` now wires the whole inbound path automatically: it registers the `entity_setter` on the observable model and sets the Homie property's `set_callback` to `partial(model.set_entity, capability, prop_id)`, so an arriving `/set` routes payload -> `model.set_entity` -> `entity_setter`. The `/set` subscription is already established when the property is added, so no `set_settable` toggle is needed. This replaces the manual three-step post-build wiring (grab the Homie handle, `set_set_callback`, `set_entity_setter`) that proxies previously hand-rolled. `doc/building-a-proxy.md` §Settable / bidirectional properties now uses the declarative path.
@@ -145,7 +147,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.9.0
 [0.8.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.8.0
 [0.7.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.7.0
 [0.6.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.6.0
