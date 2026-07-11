@@ -31,7 +31,13 @@ dependencies = [
 
 [project.optional-dependencies]
 mdns = ["zeroconf>=0.131.0"]
-dev = ["pytest"]
+# Optional: JSONSchema validation of `json`-datatype property `$format`. Absent
+# it, the SDK still runs and $format validation is gracefully skipped (with a
+# one-time warning). Kept optional so a constrained build (e.g. Yocto) can omit
+# it without a hard dependency. jsonschema>=4.0 is satisfied by kirkstone's
+# meta-python (4.4.0, pyrsistent-based, no Rust toolchain).
+validation = ["jsonschema>=4.0"]
+dev = ["pytest", "jsonschema>=4.0"]
 
 [project.urls]
 Homepage = "https://ebus.energy"

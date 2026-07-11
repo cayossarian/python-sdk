@@ -169,6 +169,23 @@ Inbound flow: MQTT `/set` -> Homie property `set_callback` -> `model.set_entity(
 
 If you build the tree by hand instead of via `build_from_declarations`, wire the same two seams yourself: `model.set_entity_setter(capability, prop_id, fn)` and `homie_property.set_set_callback(partial(model.set_entity, capability, prop_id))`.
 
+### Settable `json` properties and `$format` validation
+
+For a settable `json` property (a compound command like `flex/request`), give the `PropertySpec` a `format` that is the JSON Schema of the command surface your device accepts. An inbound `/set` payload is then `json.loads`ed to a `dict`/`list` and validated against that schema before your `entity_setter` runs, so your `entity_setter` receives a parsed, schema-valid object and a malformed or out-of-surface command is rejected for you:
+
+```python
+PropertySpec(
+    "flex", "request", PropertyDatatype.JSON, settable=True,
+    format=json.dumps({"type": "object",
+                       "properties": {"mode": {"enum": ["SHED", "LOAD_UP", "NORMAL"]},
+                                      "level": {"type": "integer", "minimum": 0, "maximum": 100}},
+                       "required": ["mode"]}),
+    entity_setter=self._on_flex_request,   # receives a validated dict
+)
+```
+
+Validation uses the optional `jsonschema` package (`pip install ebus-sdk[validation]`). Without it the property still works and validation is skipped with a one-time warning, so a constrained build can omit the dependency. On the consumer side, a controller reads a parsed object with `discovered_device.get_property_json(node, prop)` and issues a validated command with `controller.set_property_json(device_id, node, prop, obj)`.
+
 ## The anti-pattern (what not to do)
 
 Do not drive `homie.Device` / `Node` / `Property` directly from your acquisition loop and cache raw Homie property handles:

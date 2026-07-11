@@ -61,7 +61,18 @@ from functools import partial
 from typing import Any, Callable, List, Optional, Type, Union
 from ebus_mqtt_client import MqttClient
 
+# Optional: JSONSchema validation of a `json` property's `$format`. Kept optional
+# (see `ebus-sdk[validation]`) so a constrained build can omit it; absent it,
+# validation is gracefully skipped (see `validate_json_format`).
+try:
+    import jsonschema as _jsonschema
+except ImportError:  # pragma: no cover - exercised via the graceful-skip path
+    _jsonschema = None
+
 logger = logging.getLogger("homie")
+
+# One-time warning when a `$format` JSONSchema is present but jsonschema is not.
+_jsonschema_warned = False
 
 # eBus MQTT topic constants
 EBUS_HOMIE_DOMAIN = "ebus"
@@ -71,6 +82,52 @@ EBUS_HOMIE_VERSION_PATCH = 0
 EBUS_HOMIE_MQTT_QOS_DEFAULT = "2"
 
 EBUS_HOMIE_MQTT_QOS = int(os.environ.get("EBUS_HOMIE_MQTT_QOS_SITE", EBUS_HOMIE_MQTT_QOS_DEFAULT))
+
+
+def validate_json_format(value: Any, format_schema: Union[str, dict, None]) -> Optional[str]:
+    """Validate a decoded ``json``-property value against its ``$format`` JSONSchema.
+
+    A Homie 5 ``json`` property MAY carry a ``$format`` that is a JSON Schema (the
+    device's self-description of the value it accepts, e.g. the ``flex/request``
+    control surface). ``format_schema`` is that schema, as a JSON string (the
+    Homie wire form) or an already-parsed dict.
+
+    Returns ``None`` when the value is valid OR validation is SKIPPED, and a
+    human-readable error string when the value is INVALID against a usable
+    schema. Never raises. Validation is skipped (returns ``None``) when there is
+    no schema, when the schema cannot be parsed, or when the optional
+    ``jsonschema`` package is not installed (a one-time warning is logged then;
+    install ``ebus-sdk[validation]`` to enable it).
+    """
+    global _jsonschema_warned
+    if not format_schema:
+        return None
+    if _jsonschema is None:
+        if not _jsonschema_warned:
+            _jsonschema_warned = True
+            logger.warning(
+                "reason=jsonSchemaValidationUnavailable,"
+                "hint=install ebus-sdk[validation] (jsonschema) to enable $format JSONSchema validation"
+            )
+        return None
+    schema = format_schema
+    if isinstance(schema, str):
+        try:
+            schema = json.loads(schema)
+        except (ValueError, TypeError):
+            logger.warning("reason=jsonSchemaFormatNotParseable")
+            return None
+    if not isinstance(schema, dict):
+        return None
+    try:
+        _jsonschema.validate(instance=value, schema=schema)
+        return None
+    except _jsonschema.ValidationError as e:
+        return e.message
+    except _jsonschema.SchemaError as e:
+        logger.warning(f"reason=jsonSchemaInvalidSchema,error={e}")
+        return None
+
 
 if EBUS_HOMIE_MQTT_QOS < 1:
     logger.warning(
@@ -733,6 +790,14 @@ class Property:
             decoded_payload = decode_empty_string(decoded_payload)
             if self.is_json_datatype():
                 payload = json.loads(decoded_payload)
+                # Validate the decoded command against the property's $format
+                # JSONSchema (its advertised control surface). Reject an invalid
+                # command rather than acting on it. Graceful: skipped if there is
+                # no $format or the jsonschema package is not installed.
+                error = validate_json_format(payload, self._format)
+                if error is not None:
+                    logger.warning(f"reason=propertySetRejectedSchemaInvalid,propertyID={property_id},error={error}")
+                    return
             else:
                 payload = decoded_payload
             # We have the payload
@@ -1811,8 +1876,32 @@ class DiscoveredDevice:
         self.last_seen = time.time()
 
     def get_property(self, node_id: str, property_id: str) -> Optional[str]:
-        """Get current value of a property"""
+        """Get current value of a property (raw string as received)"""
         return self.properties.get(node_id, {}).get(property_id)
+
+    def get_property_json(self, node_id: str, property_id: str) -> Any:
+        """Get a property value decoded from JSON, for a ``json``-datatype property.
+
+        Looks up the property's `datatype` in this device's `$description`: if it
+        is `json`, the stored raw value is `json.loads`ed and the parsed
+        dict/list is returned; a non-`json` property returns its raw value
+        unchanged. Returns None if the value is absent or cannot be parsed. This
+        is the consumer-side counterpart to a publisher's `json` property, so a
+        controller reads a parsed object (e.g. `flex/active-request`) rather than
+        a raw JSON string.
+        """
+        raw = self.get_property(node_id, property_id)
+        if raw is None:
+            return None
+        props = self.get_node_properties(node_id)
+        datatype = props.get(property_id, {}).get("datatype") if isinstance(props, dict) else None
+        if datatype != PropertyDatatype.JSON:
+            return raw
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            logger.warning(f"reason=getPropertyJsonParseError,node={node_id},property={property_id}")
+            return None
 
     def get_property_target(self, node_id: str, property_id: str) -> Optional[str]:
         """Get target value of a property"""
@@ -2403,6 +2492,46 @@ class Controller:
         except Exception as e:
             logger.error(f"reason=setPropertyException,error={e}")
             return False
+
+    def set_property_json(
+        self,
+        device_id: str,
+        node_id: str,
+        property_id: str,
+        obj: Any,
+        *,
+        validate: bool = True,
+        qos: Optional[int] = None,
+    ) -> bool:
+        """Publish a JSON command to a settable ``json`` property's ``/set`` topic.
+
+        Serializes `obj` (a dict/list) to JSON and sends it via `set_property`.
+        When `validate` is True and the target property advertises a `$format`
+        JSONSchema in the discovered `$description`, the command is validated
+        against that schema first; an invalid command is NOT sent (returns
+        False). Validation is graceful: with no schema (or without the optional
+        `jsonschema` package) it is skipped. Returns True if the command was
+        sent. Use this for settable json control surfaces such as `flex/request`.
+        """
+        if validate:
+            device = self.devices.get(device_id)
+            format_schema = None
+            if device is not None:
+                props = device.get_node_properties(node_id)
+                if isinstance(props, dict):
+                    format_schema = props.get(property_id, {}).get("format")
+            error = validate_json_format(obj, format_schema)
+            if error is not None:
+                logger.warning(
+                    f"reason=setPropertyJsonRejectedSchemaInvalid,deviceID={device_id},property={property_id},error={error}"
+                )
+                return False
+        try:
+            payload = json.dumps(obj)
+        except (TypeError, ValueError) as e:
+            logger.error(f"reason=setPropertyJsonEncodeError,deviceID={device_id},property={property_id},error={e}")
+            return False
+        return self.set_property(device_id, node_id, property_id, payload, qos=qos)
 
     def broadcast(self, subtopic: str, message: str, qos: Optional[int] = None) -> bool:
         """

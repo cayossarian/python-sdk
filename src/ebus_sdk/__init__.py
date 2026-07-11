@@ -35,6 +35,7 @@ from .homie import (
     sanitize_homie_id,
     encode_empty_string,
     decode_empty_string,
+    validate_json_format,
 )
 
 # Property abstractions
@@ -89,6 +90,7 @@ __all__ = [
     "sanitize_homie_id",
     "encode_empty_string",
     "decode_empty_string",
+    "validate_json_format",
     # Property abstractions
     "ObservableProperty",
     "GroupedPropertyDict",
