@@ -177,6 +177,7 @@ src/ebus_sdk/
 ├── property.py     # Observable application-state model (Property, GroupedPropertyDict)
 ├── adapter.py      # Proxy/adapter helpers that mirror the model onto Homie
 ├── declaration.py  # Declarative PropertySpec + build_from_declarations + resolve
+├── topology.py     # Consumer-side site-topology assembler (SiteTopology)
 └── ha/             # Home Assistant MQTT discovery interop (parse in, emit out)
 ```
 
@@ -219,6 +220,15 @@ The declarative "schema" layer for proxies (see [`doc/building-a-proxy.md`](doc/
 - **PropertySpec** - declares one eBus property (capability/node, id, datatype, unit, scale, settable)
 - **build_from_declarations** - materializes a set of specs into Homie nodes/properties, the observable model, and their bindings in one call
 - **resolve** / **specs_and_values** / **ResolvedProperty** - the two-tier mapping (hand-authored `mapping` first, generic `fallback` for the rest) that turns source fields into specs and scaled values
+
+### topology.py
+
+Consumer-side **site-topology assembler** for the `connection` capability. eBus records site wiring as distributed per-device edges (`feeds-*` / `fed-by-*`) with no central authority; `SiteTopology.assemble(devices)` / `SiteTopology.from_controller(controller)` reconstructs the graph once so every consumer gets a resolved, queryable view:
+
+- **`root()`**, **`parents`** / **`children`** / **`what_feeds`**, **`ancestors`** / **`descendants`** (cycle-safe) - traverse the assembled graph
+- **`connection_points_feeding(id)`** + **`aggregate(id, value_fn)`** - the multi-source case (e.g. a multi-unit BESS on several circuits); sum a caller-supplied metric across them
+- **`backed_up_loads()`**, **`completeness()`** - which paths survive an outage; surveyed-vs-unknown coverage
+- Robust to partial data: dangling references become `undiscovered()` placeholders, cycles terminate, and the graph is explicitly a view (never a source of truth)
 
 ### ha/
 

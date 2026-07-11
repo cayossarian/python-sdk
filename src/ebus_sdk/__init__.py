@@ -66,6 +66,15 @@ from .declaration import (
     specs_and_values,
 )
 
+# Consumer-side site-topology assembler (see doc/building-a-proxy.md / connection capability)
+from .topology import (
+    CONNECTION_NODE_TYPE,
+    ConnectionRecord,
+    SiteTopology,
+    TopologyEdge,
+    TopologyNode,
+)
+
 # MQTT client
 from ebus_mqtt_client import MqttClient
 
@@ -113,6 +122,12 @@ __all__ = [
     "python_type_for",
     "resolve",
     "specs_and_values",
+    # Site-topology assembler
+    "SiteTopology",
+    "ConnectionRecord",
+    "TopologyNode",
+    "TopologyEdge",
+    "CONNECTION_NODE_TYPE",
     # MQTT
     "MqttClient",
 ]
