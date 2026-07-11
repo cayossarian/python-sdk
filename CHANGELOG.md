@@ -4,6 +4,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `Unit` enum: apparent- and reactive-power/energy units for the `meter` capability, so a meter proxy (revenue meter, EKM, eGauge, BESS AC boundary) can set the correct unit on those properties instead of dropping them (GH #6). New members `VOLT_AMPERE` (`VA`), `VOLT_AMPERE_HOUR` (`VAh`), and `VOLT_AMPERE_REACTIVE_HOUR` (`varh`) join the existing `VOLT_AMPERE_REACTIVE` (`var`). Casing follows IEC 80000-6 (the same SI-symbol style the Homie convention uses): apparent uppercase `VA`/`VAh`, reactive lowercase `var`/`varh`. The HA discovery bridge's inbound unit table maps these (and the `k`-prefixed variants) as well.
+
 ### Changed
 
 - Packaging: dropped the redundant direct `paho-mqtt` dependency. The SDK does not import paho directly (MQTT transport lives entirely in `ebus-mqtt-client`, which pins `paho-mqtt`), so paho is now purely transitive. No change to what gets installed. README requirements corrected to list `ebus-mqtt-client` (and the optional `mdns` / `validation` extras) instead of a stale `paho-mqtt` version.

@@ -300,10 +300,18 @@ class Unit(StrEnum):
     KELVIN = "K"
     MIRED = "MK" + UNICODE_EXPONENT_MINUS + UNICODE_EXPONENT_1
     COUNT_OR_AMOUNT = "#"
-    # VOLT_AMPERE_REACTIVE not in Homie specification, but we need it
-    # https://github.com/homieiot/convention/issues/318
-    VOLT_AMPERE_REACTIVE = "var"
     WATT_HOUR = "Wh"
+    # Apparent- and reactive-power/energy units. Not in the Homie convention's
+    # recommended list (which stops at the common SI symbols), but the eBus
+    # `meter` capability defines them. Casing follows IEC 80000-6, the same
+    # SI-symbol style the Homie convention uses (W, Hz, Pa, ...): apparent
+    # power/energy are the uppercase VA / VAh, and reactive power/energy are the
+    # lowercase var / varh (var is the IEC standardized symbol, not VAR). See
+    # https://github.com/homieiot/convention/issues/318 and eBus meter.md.
+    VOLT_AMPERE = "VA"
+    VOLT_AMPERE_HOUR = "VAh"
+    VOLT_AMPERE_REACTIVE = "var"
+    VOLT_AMPERE_REACTIVE_HOUR = "varh"
 
 
 class PropertyDatatype(StrEnum):

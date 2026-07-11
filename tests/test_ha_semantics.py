@@ -14,8 +14,28 @@ def test_unit_for_known_and_scaled():
     assert unit_for("mA") == (Unit.AMPERE, 0.001)
 
 
+def test_unit_for_apparent_and_reactive():
+    # IEC 80000-6 casing: apparent power/energy uppercase VA/VAh, reactive
+    # power/energy lowercase var/varh; kilo variants scale by 1000.
+    assert unit_for("VA") == (Unit.VOLT_AMPERE, 1.0)
+    assert unit_for("kVA") == (Unit.VOLT_AMPERE, 1000.0)
+    assert unit_for("VAh") == (Unit.VOLT_AMPERE_HOUR, 1.0)
+    assert unit_for("var") == (Unit.VOLT_AMPERE_REACTIVE, 1.0)
+    assert unit_for("kvar") == (Unit.VOLT_AMPERE_REACTIVE, 1000.0)
+    assert unit_for("varh") == (Unit.VOLT_AMPERE_REACTIVE_HOUR, 1.0)
+    assert unit_for("kvarh") == (Unit.VOLT_AMPERE_REACTIVE_HOUR, 1000.0)
+
+
+def test_unit_string_values_follow_iec_casing():
+    # The enum wire values are the exact IEC 80000-6 symbols.
+    assert Unit.VOLT_AMPERE == "VA"
+    assert Unit.VOLT_AMPERE_HOUR == "VAh"
+    assert Unit.VOLT_AMPERE_REACTIVE == "var"
+    assert Unit.VOLT_AMPERE_REACTIVE_HOUR == "varh"
+
+
 def test_unit_for_unknown_is_none():
-    assert unit_for("VA") == (None, 1.0)  # sdk has no apparent-power unit yet
+    assert unit_for("nonsense-unit") == (None, 1.0)
     assert unit_for(None) == (None, 1.0)
 
 

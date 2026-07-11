@@ -60,8 +60,10 @@ _DEFAULT_ORIGIN_NAME = EBUS_SDK_ORIGIN_NAME
 # Inverse of `semantics._UNIT_TABLE`: a Homie/HA unit string -> the HA
 # (device_class, default state_class) it implies. `%` is deliberately absent:
 # a percent could be battery, humidity, or power_factor, so inference declines
-# to guess and an override / customizer must decide. Units the eBus sdk cannot
-# emit (VA, varh) are still mappable here because HA understands them.
+# to guess and an override / customizer must decide. Apparent/reactive ENERGY
+# (VAh / varh) are likewise absent: HA has no standard energy device_class for
+# them, so they emit without one rather than misusing `energy` (which is real
+# energy in Wh). Apparent/reactive POWER (VA / var) do have HA device classes.
 _UNIT_SEMANTICS = {
     "Wh": ("energy", "total_increasing"),
     "kWh": ("energy", "total_increasing"),
