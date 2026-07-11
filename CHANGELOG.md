@@ -4,6 +4,8 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-11
+
 ### Added
 
 - `ebus_sdk.topology`: a consumer-side **site-topology assembler** for the `connection` capability. eBus records site wiring as distributed per-device edges (`feeds-*` / `fed-by-*`, plus `backed-up` / `feeds-role` / `service-rating` / ...), with no central topology authority; `SiteTopology.assemble(devices)` / `SiteTopology.from_controller(controller)` reconstructs the graph from those edges (the "Assembling the site topology" algorithm), so every consumer gets a resolved, queryable view instead of re-crawling the bus. Reconciles the two edge directions (an edge is `confirmed` when both sides assert it), derives each connection point's class from its device `$type`, and roots the graph at the service-entrance lugs. Query API: `root()`, `parents`/`children`/`what_feeds`, `ancestors`/`descendants` (cycle-safe), `connection_points_feeding(id)` + `aggregate(id, value_fn)` (the multi-source case, e.g. a multi-unit BESS on several circuits), `backed_up_loads()`, and `completeness()`. It is a read-only VIEW: partial data yields a partial graph, and dangling references (`undiscovered()`) and cycles degrade gracefully rather than crash. No new dependency.
@@ -158,7 +160,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.10.0
 [0.9.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.9.0
 [0.8.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.8.0
 [0.7.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.7.0
