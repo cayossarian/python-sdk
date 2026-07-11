@@ -1734,3 +1734,42 @@ class TestDeviceDescriptionExtras:
         desc = d.description()
         assert desc["name"] != "HACKED"  # core name wins over an extra of the same key
         assert desc["nodes"] == {}  # core nodes win
+
+
+class TestDeviceStop:
+    """Device.stop(): bounded graceful teardown (SDK-y68)."""
+
+    def test_publishes_disconnected_then_stops_when_connected(self, mock_paho):
+        device, mock_client = _make_device(mock_paho, device_id="dev-stop")
+        mock_client.is_connected.return_value = True
+
+        device.stop()
+
+        # Graceful $state=disconnected flushed before teardown.
+        mock_client.publish_and_flush.assert_called_once()
+        args, kwargs = mock_client.publish_and_flush.call_args
+        assert args[0] == f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/dev-stop/$state"
+        assert args[1] == DeviceState.DISCONNECTED.value == "disconnected"
+        assert kwargs["retain"] is True
+        assert device._state == DeviceState.DISCONNECTED
+        # Bounded client stop, then the reference is cleared.
+        mock_client.stop.assert_called_once()
+        assert mock_client.stop.call_args.kwargs["timeout"] == 2.0
+        assert device.mqttc is None
+
+    def test_skips_publish_when_broker_unreachable(self, mock_paho):
+        device, mock_client = _make_device(mock_paho, device_id="dev-stop2")
+        mock_client.is_connected.return_value = False
+
+        device.stop()
+
+        # No graceful publish attempted on a dead broker; still tears down promptly.
+        mock_client.publish_and_flush.assert_not_called()
+        mock_client.stop.assert_called_once()
+        assert device.mqttc is None
+
+    def test_no_mqtt_client_is_noop(self, mock_paho):
+        device, mock_client = _make_device(mock_paho)
+        device.mqttc = None
+        device.stop()  # must not raise
+        mock_client.stop.assert_not_called()

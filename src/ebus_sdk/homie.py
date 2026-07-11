@@ -1232,6 +1232,44 @@ class Device:
         if not root.mqttc.is_running:
             root.mqttc.start()
 
+    def stop(self, *, flush_timeout: float = 1.0, stop_timeout: float = 2.0) -> None:
+        """Gracefully and promptly tear down this device tree's MQTT connection.
+
+        Publishes a final ``$state=disconnected`` for the root (best-effort) then
+        stops the root's MQTT client. This is a TREE-level teardown: children
+        share the root's connection, so a call on any device stops the whole
+        tree; per the Homie 5 effective-state rule, the root going
+        ``disconnected`` covers every descendant.
+
+        BOUNDED end to end (at most ~``flush_timeout`` + ``stop_timeout``): if the
+        broker is unreachable the disconnected publish is skipped and ``stop()``
+        still returns promptly, so a shutting-down process never stalls on a dead
+        broker. Because ``MqttClient.stop()`` performs a clean disconnect (which
+        suppresses the LWT), publishing ``$state=disconnected`` first is what lets
+        consumers see a clean shutdown rather than a stale ``ready`` or a
+        badly-disconnected ``lost``. After ``stop()`` this device tree should not
+        be reused.
+        """
+        root = self.root()
+        mqttc = root.mqttc
+        if mqttc is None:
+            logger.warning(f"reason=deviceStopNoMqttClient,id={self._id}")
+            return
+        # Best-effort graceful $state=disconnected. publish_and_flush is bounded
+        # and returns False (never blocks/raises) when the broker is unreachable,
+        # so this can't stall shutdown.
+        if mqttc.is_connected():
+            root._state = DeviceState.DISCONNECTED
+            state_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{root._id}/$state"
+            flushed = mqttc.publish_and_flush(
+                state_topic, DeviceState.DISCONNECTED.value, qos=root._qos, retain=True, timeout=flush_timeout
+            )
+            logger.info(f"reason=deviceStopDisconnectedPublished,id={root._id},flushed={flushed}")
+        else:
+            logger.info(f"reason=deviceStopBrokerUnreachable,id={root._id}")
+        mqttc.stop(timeout=stop_timeout)
+        root.mqttc = None
+
     def description(self) -> dict:
         """
         Returns a dict of the $description attribute of the Device

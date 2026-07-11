@@ -4,6 +4,14 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `Device.stop()`: a bounded, graceful teardown for a device tree. It publishes a final `$state=disconnected` for the root (best-effort) then stops the root's MQTT client, so consumers see a clean shutdown rather than a stale `ready` (the underlying clean disconnect suppresses the LWT) or a badly-disconnected `lost`. It is BOUNDED end to end (at most ~`flush_timeout` + `stop_timeout`): if the broker is unreachable the disconnected publish is skipped and `stop()` still returns promptly, so a shutting-down process never stalls on a dead broker. Built on `ebus-mqtt-client` 0.1.7's `publish_and_flush()` + bounded `stop(timeout=...)`, so no fixed sleep is needed. This lets device publishers (e.g. the panel adapter) shut down cleanly via a normal signal handler + `sys.exit()` instead of `os._exit()`.
+
+### Changed
+
+- Dependency floor: `ebus-mqtt-client>=0.1.7` (was `>=0.1.6`), for the bounded `publish_and_flush()` / `stop(timeout=...)` primitives that back `Device.stop()`.
+
 ## [0.9.0] — 2026-07-05
 
 ### Added
