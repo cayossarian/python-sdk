@@ -36,6 +36,9 @@ from .homie import (
     encode_empty_string,
     decode_empty_string,
     validate_json_format,
+    JsonFieldConstraint,
+    json_format_field,
+    json_format_fields,
 )
 
 # Property abstractions
@@ -91,6 +94,9 @@ __all__ = [
     "encode_empty_string",
     "decode_empty_string",
     "validate_json_format",
+    "JsonFieldConstraint",
+    "json_format_field",
+    "json_format_fields",
     # Property abstractions
     "ObservableProperty",
     "GroupedPropertyDict",

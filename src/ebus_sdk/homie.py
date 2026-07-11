@@ -55,6 +55,7 @@ except ImportError:
         pass
 
 
+from dataclasses import dataclass
 from functools import partial
 
 # from deprecated import deprecated
@@ -147,6 +148,100 @@ if EBUS_HOMIE_MQTT_QOS < 1:
 # sole character is 0x00; a device needing that must escape it at the
 # application level (see module header).
 HOMIE_EMPTY_STRING_PAYLOAD = "\x00"
+
+
+@dataclass(frozen=True)
+class JsonFieldConstraint:
+    """The control-surface constraint on one field of a ``json`` ``$format`` schema.
+
+    Derived from a Homie 5 ``json`` property's ``$format`` JSONSchema so a
+    consumer/UI can honor the device's advertised surface without re-parsing the
+    schema. For the canonical ``flex/request`` ``level`` cases: ``enum`` names the
+    exact supported values (render buttons), a numeric range gives
+    ``minimum``/``maximum``/``multiple_of`` (render a slider, stepped if
+    ``multiple_of``), and an absent field means the device does not accept it.
+    Complex schema constructs (``anyOf``/``oneOf``/nested objects) are not
+    decomposed; such a field reports ``kind == "free"`` with whatever scalar
+    facets are present.
+    """
+
+    name: str
+    present: bool  # is the field declared in the schema's `properties`?
+    required: bool  # is it listed in the schema's `required`?
+    type: Optional[str] = None  # JSON type: "integer" / "number" / "string" / ...
+    enum: Optional[list] = None  # exact allowed values, if an enum
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
+    multiple_of: Optional[float] = None
+
+    @property
+    def kind(self) -> str:
+        """`"absent"` | `"enum"` | `"range"` | `"free"` — a UI-rendering hint."""
+        if not self.present:
+            return "absent"
+        if self.enum is not None:
+            return "enum"
+        if self.minimum is not None or self.maximum is not None:
+            return "range"
+        return "free"
+
+
+def _as_schema_dict(format_schema: Union[str, dict, None]) -> Optional[dict]:
+    """Parse a `$format` (JSON string or dict) into a schema dict, or None."""
+    if not format_schema:
+        return None
+    schema = format_schema
+    if isinstance(schema, str):
+        try:
+            schema = json.loads(schema)
+        except (ValueError, TypeError):
+            return None
+    return schema if isinstance(schema, dict) else None
+
+
+def json_format_field(format_schema: Union[str, dict, None], field: str) -> JsonFieldConstraint:
+    """Introspect one field of a ``json`` property's ``$format`` JSONSchema.
+
+    ``format_schema`` is the ``$format`` as a JSON string (the Homie wire form) or
+    a parsed dict. Returns a `JsonFieldConstraint`; a missing schema or field
+    yields ``present=False`` (``kind == "absent"``).
+    """
+    schema = _as_schema_dict(format_schema)
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    required = set(schema.get("required", [])) if isinstance(schema, dict) else set()
+    if not isinstance(props, dict) or field not in props or not isinstance(props[field], dict):
+        return JsonFieldConstraint(name=field, present=False, required=field in required)
+    f = props[field]
+    minimum = f.get("minimum")
+    maximum = f.get("maximum")
+    return JsonFieldConstraint(
+        name=field,
+        present=True,
+        required=field in required,
+        type=f.get("type"),
+        enum=list(f["enum"]) if isinstance(f.get("enum"), list) else None,
+        minimum=float(minimum) if isinstance(minimum, (int, float)) and not isinstance(minimum, bool) else None,
+        maximum=float(maximum) if isinstance(maximum, (int, float)) and not isinstance(maximum, bool) else None,
+        multiple_of=(
+            float(f["multipleOf"])
+            if isinstance(f.get("multipleOf"), (int, float)) and not isinstance(f.get("multipleOf"), bool)
+            else None
+        ),
+    )
+
+
+def json_format_fields(format_schema: Union[str, dict, None]) -> dict:
+    """Introspect every top-level field of a ``json`` ``$format`` JSONSchema.
+
+    Returns ``{field_name: JsonFieldConstraint}`` for each property the schema
+    declares (empty dict if the schema is missing/unusable or declares no
+    ``properties``). See `json_format_field`.
+    """
+    schema = _as_schema_dict(format_schema)
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict):
+        return {}
+    return {name: json_format_field(schema, name) for name in props}
 
 
 def encode_empty_string(value: str) -> str:
@@ -1902,6 +1997,19 @@ class DiscoveredDevice:
         except (ValueError, TypeError):
             logger.warning(f"reason=getPropertyJsonParseError,node={node_id},property={property_id}")
             return None
+
+    def get_property_format_fields(self, node_id: str, property_id: str) -> dict:
+        """Introspect a `json` property's `$format` control surface, from the description.
+
+        Returns `{field_name: JsonFieldConstraint}` derived from the property's
+        `$format` JSONSchema (empty dict if there is no schema). Lets a controller
+        honor a settable json control surface it discovered, e.g. rendering
+        `flex/request`'s `level` as buttons (enum) or a slider (range). See
+        `json_format_fields`.
+        """
+        props = self.get_node_properties(node_id)
+        format_schema = props.get(property_id, {}).get("format") if isinstance(props, dict) else None
+        return json_format_fields(format_schema)
 
     def get_property_target(self, node_id: str, property_id: str) -> Optional[str]:
         """Get target value of a property"""

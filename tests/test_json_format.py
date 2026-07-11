@@ -175,3 +175,88 @@ def test_set_property_json_skips_validation_when_disabled():
     # validate=False sends even a schema-invalid command (caller opts out).
     assert ctrl.set_property_json("dev-flex", "flex", "request", {"mode": "BOGUS"}, validate=False) is True
     mock_client.publish.assert_called_once()
+
+
+# --- Phase 3: schema-derived control-surface introspection -------------------
+
+from ebus_sdk import JsonFieldConstraint, json_format_field, json_format_fields  # noqa: E402
+
+# The three canonical flex `level` cases from the spec.
+SCHEMA_ENUM_LEVEL = {
+    "type": "object",
+    "properties": {"mode": {"enum": ["SHED", "NORMAL"]}, "level": {"enum": [40, 60, 100]}},
+    "required": ["mode"],
+}
+SCHEMA_RANGE_LEVEL = {
+    "type": "object",
+    "properties": {
+        "mode": {"enum": ["SHED", "NORMAL"]},
+        "level": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 10},
+    },
+    "required": ["mode"],
+}
+SCHEMA_NO_LEVEL = {"type": "object", "properties": {"mode": {"enum": ["SHED", "NORMAL"]}}, "required": ["mode"]}
+
+
+def test_field_enum_level():
+    c = json_format_field(SCHEMA_ENUM_LEVEL, "level")
+    assert c.present and c.kind == "enum"
+    assert c.enum == [40, 60, 100]
+    assert c.required is False
+
+
+def test_field_range_level():
+    c = json_format_field(SCHEMA_RANGE_LEVEL, "level")
+    assert c.kind == "range"
+    assert (c.minimum, c.maximum, c.multiple_of) == (0.0, 100.0, 10.0)
+    assert c.type == "integer"
+
+
+def test_field_absent_level():
+    c = json_format_field(SCHEMA_NO_LEVEL, "level")
+    assert c.present is False and c.kind == "absent"
+
+
+def test_field_required_enum_mode():
+    c = json_format_field(SCHEMA_ENUM_LEVEL, "mode")
+    assert c.kind == "enum" and c.required is True and c.enum == ["SHED", "NORMAL"]
+
+
+def test_field_accepts_json_string_schema():
+    c = json_format_field(json.dumps(SCHEMA_RANGE_LEVEL), "level")
+    assert c.kind == "range" and c.maximum == 100.0
+
+
+def test_field_no_schema_is_absent():
+    assert json_format_field(None, "level").kind == "absent"
+    assert json_format_field("{ not json", "level").kind == "absent"
+
+
+def test_fields_maps_all_properties():
+    fields = json_format_fields(SCHEMA_RANGE_LEVEL)
+    assert set(fields) == {"mode", "level"}
+    assert all(isinstance(v, JsonFieldConstraint) for v in fields.values())
+    assert fields["mode"].kind == "enum"
+    assert fields["level"].kind == "range"
+
+
+def test_fields_empty_when_no_properties():
+    assert json_format_fields(None) == {}
+    assert json_format_fields({"type": "string"}) == {}
+
+
+def test_discovered_device_introspects_format(monkeypatch=None):
+    dev = DiscoveredDevice("d")
+    desc = {
+        "nodes": {
+            "flex": {
+                "properties": {
+                    "request": {"datatype": "json", "settable": True, "format": json.dumps(SCHEMA_ENUM_LEVEL)}
+                }
+            }
+        }
+    }
+    dev.update_description(json.dumps(desc))
+    fields = dev.get_property_format_fields("flex", "request")
+    assert fields["level"].enum == [40, 60, 100]
+    assert fields["mode"].required is True

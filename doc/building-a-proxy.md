@@ -184,7 +184,7 @@ PropertySpec(
 )
 ```
 
-Validation uses the optional `jsonschema` package (`pip install ebus-sdk[validation]`). Without it the property still works and validation is skipped with a one-time warning, so a constrained build can omit the dependency. On the consumer side, a controller reads a parsed object with `discovered_device.get_property_json(node, prop)` and issues a validated command with `controller.set_property_json(device_id, node, prop, obj)`.
+Validation uses the optional `jsonschema` package (`pip install ebus-sdk[validation]`). Without it the property still works and validation is skipped with a one-time warning, so a constrained build can omit the dependency. On the consumer side, a controller reads a parsed object with `discovered_device.get_property_json(node, prop)` and issues a validated command with `controller.set_property_json(device_id, node, prop, obj)`. To honor the device's advertised control surface, `discovered_device.get_property_format_fields(node, prop)` (or `json_format_fields(schema)`) introspects the `$format` into per-field `JsonFieldConstraint`s — each reporting `enum` values, a numeric `range` (`minimum`/`maximum`/`multiple_of`), or an absent field — so a UI can render `flex/request`'s `level` as buttons or a stepped slider straight from the schema.
 
 ## The anti-pattern (what not to do)
 
