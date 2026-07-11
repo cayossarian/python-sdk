@@ -7,7 +7,7 @@
     "model": "Example-Meter-2S",
     "serial-number": "example-meter-001",
     "firmware-version": "0.0.1",
-    "data-model-version": "0.1",
+    "data-model-version": "0.3",
     "meter-form": "2S",
     "meter-class": "0.2",
     "phases": 2,
@@ -15,7 +15,11 @@
     "nominal-frequency": 60.0,
     "nominal-phase-angle": 180.0,
     "nominal-voltage-line-to-line": 240.0,
-    "nominal-voltage-line-to-neutral": 120.0
+    "nominal-voltage-line-to-neutral": 120.0,
+    "calculation-convention": "ARITHMETIC",
+    "ct-ratio": 1.0,
+    "pt-ratio": 1.0,
+    "register-multiplier": 1.0
   },
 
   "meter": {
@@ -32,7 +36,15 @@
   "status": {
     "communication-state": "OK",
     "time-sync-state": "LOCKED",
-    "tamper-state": "NORMAL"
+    "tamper-state": "NORMAL",
+    "reverse-energy-flag": false,
+    "internal-temperature": 41.5
+  },
+
+  "grid": {
+    "grid-state": "UP",
+    "last-outage-time": "2026-06-28T14:12:00Z",
+    "last-restoration-time": "2026-06-28T14:47:00Z"
   },
 
   "doe": {
@@ -44,5 +56,34 @@
         "start-time": "2026-07-01T00:00:00Z"
       }
     ]
+  },
+
+  "price": {
+    "import-price": [
+      {
+        "price": 0.32,
+        "currency": "USD",
+        "price-level": "MID_PEAK",
+        "source": "SCHEDULED",
+        "start-time": "2026-07-01T00:00:00Z"
+      }
+    ]
+  },
+
+  "demand": {
+    "integration-window": 900,
+    "current-interval-demand": 1620.0,
+    "previous-interval-demand": 1900.0,
+    "peak-demand-this-period": 4200.0,
+    "peak-demand-time": "2026-07-03T17:30:00Z",
+    "peak-demand-reset-time": "2026-07-01T00:00:00Z"
+  },
+
+  "power-quality": {
+    "thd-voltage-a": 2.1,
+    "thd-voltage-b": 2.3,
+    "thd-current-a": 4.8,
+    "thd-current-b": 5.1,
+    "voltage-unbalance": 0.6
   }
 }

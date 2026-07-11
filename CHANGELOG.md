@@ -12,6 +12,7 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 ### Changed
 
 - Dependency floor: `ebus-mqtt-client>=0.1.7` (was `>=0.1.6`), for the bounded `publish_and_flush()` / `stop(timeout=...)` primitives that back `Device.stop()`.
+- `examples/utility-meter` refreshed to the current utility-meter data model (v0.3): it now publishes all eight capabilities (adding `grid`, `price`, `demand`, `power-quality` to the existing `info`/`meter`/`status`/`doe`), advertises the `$format` JSONSchema on the `doe` and `price` json properties (and the value list on enum properties), and validates each runtime doe/price HTTP update against that `$format` before publishing — a worked demonstration of the json/`$format` support above.
 
 ## [0.9.0] — 2026-07-05
 

@@ -4,8 +4,12 @@ utility-meter — eBus utility-meter publisher reference implementation.
 
 Publishes a single eBus utility-meter device
 (`energy.ebus.device.utility-meter`, per `data-models/utility-meter.md`
-in the Electrification Bus specification) to an MQTT broker, exposing the
-data-model's standard capabilities: `info`, `meter`, `status`, and `doe`.
+in the Electrification Bus specification, v0.3) to an MQTT broker, exposing
+the data model's capabilities: the required `info`, `meter`, and `status`,
+plus the optional `grid`, `doe`, `price`, `demand`, and `power-quality` a
+meter publishes when it has the signal. The `doe` and `price` json properties
+advertise a `$format` JSONSchema (their envelope / price-window array schema),
+and the enum properties advertise their allowed values via `$format`.
 
 Intended for developers building an eBus utility-meter publisher who want
 a runnable starting point. Suitable for running on a Raspberry Pi or any
@@ -25,7 +29,10 @@ utility's out-of-band backhaul:
 The body is a single envelope object or an array of them (the retained
 schedule); the whole array is set atomically as one json value. POST an
 empty body (or `null`) to clear the signal for that direction. The same
-endpoint shape is served at `/doe/export-limit`.
+endpoint shape is served at `/doe/export-limit` and, for the price schedules,
+at `/price/import-price` and `/price/export-price`. Each posted body is
+validated against the property's `$format` JSONSchema before publish (via
+`homie.validate_json_format`; install `ebus-sdk[validation]` to enable it).
 
 Meter measurements (`meter/active-power`, etc.) are synthesised from a config
 file — this is a publisher reference, not a metrology device.
@@ -63,18 +70,66 @@ DEFAULT_BROKER_CFG_ENV = "EBUS_BROKER_CFG"
 # eBus utility-meter device type per the data model.
 DEVICE_TYPE = "energy.ebus.device.utility-meter"
 
-# Capability node types.
+# Capability node types (the eBus utility-meter data model, v0.3: three MUST
+# capabilities plus five optional ones a meter publishes when it has the signal).
 CAPABILITY_INFO = "energy.ebus.capability.info"
 CAPABILITY_METER = "energy.ebus.capability.meter"
 CAPABILITY_STATUS = "energy.ebus.capability.status"
+CAPABILITY_GRID = "energy.ebus.capability.grid"
 CAPABILITY_DOE = "energy.ebus.capability.doe"
+CAPABILITY_PRICE = "energy.ebus.capability.price"
+CAPABILITY_DEMAND = "energy.ebus.capability.demand"
+CAPABILITY_POWER_QUALITY = "energy.ebus.capability.power-quality"
 
 # doe capability: two json properties, one per direction. Each holds a JSON
-# array of envelope objects per the eBus utility-meter data model (v0.2).
+# array of envelope objects per capabilities/doe.md.
 DOE_DIRECTIONS = ("import-limit", "export-limit")
 
-# Envelope `source` enum (absent = UNKNOWN) per the data model.
-DOE_SOURCES = frozenset({"CONTRACT", "REGULATOR", "EQUIPMENT", "GRID", "UNKNOWN"})
+# price capability: two json properties, one per direction. Each holds a JSON
+# array of price-window objects per capabilities/price.md.
+PRICE_DIRECTIONS = ("import-price", "export-price")
+
+# The $format JSONSchemas advertised on the doe / price json properties (their
+# self-describing envelope / price-window array schemas). Serialized to a string
+# on the property per the Homie 5 json-$format convention; the dict form is
+# reused for publisher-side validation via homie.validate_json_format().
+DOE_LIMIT_FORMAT = {
+    "type": "array",
+    "minItems": 1,
+    "items": {
+        "type": "object",
+        "properties": {
+            "power-limit": {"type": "integer", "minimum": 0},
+            "apparent-power-limit": {"type": "integer", "minimum": 0},
+            "source": {"type": "string", "enum": ["CONTRACT", "REGULATOR", "EQUIPMENT", "GRID", "UNKNOWN"]},
+            "start-time": {"type": "string", "format": "date-time"},
+            "end-time": {"type": "string", "format": "date-time"},
+        },
+        "anyOf": [{"required": ["power-limit"]}, {"required": ["apparent-power-limit"]}],
+    },
+}
+PRICE_FORMAT = {
+    "type": "array",
+    "minItems": 1,
+    "items": {
+        "type": "object",
+        "properties": {
+            "price": {"type": "number"},
+            "currency": {"type": "string"},
+            "price-level": {
+                "type": "string",
+                "enum": ["SUPER_OFF_PEAK", "OFF_PEAK", "MID_PEAK", "ON_PEAK", "CRITICAL_PEAK", "UNKNOWN"],
+            },
+            "source": {"type": "string", "enum": ["SCHEDULED", "MARKET", "EVENT", "UNKNOWN"]},
+            "start-time": {"type": "string", "format": "date-time"},
+            "end-time": {"type": "string", "format": "date-time"},
+        },
+        "dependentRequired": {"price": ["currency"]},
+        "anyOf": [{"required": ["price"]}, {"required": ["price-level"]}],
+    },
+}
+DOE_LIMIT_FORMAT_STR = json.dumps(DOE_LIMIT_FORMAT)
+PRICE_FORMAT_STR = json.dumps(PRICE_FORMAT)
 
 
 # ─── Logger boilerplate ───────────────────────────────────────────────────────
@@ -118,7 +173,11 @@ class UtilityMeter:
         self._populate_info()
         self._populate_meter()
         self._populate_status()
+        self._populate_scalars("grid")
+        self._populate_scalars("demand")
+        self._populate_scalars("power-quality")
         self._populate_doe()
+        self._populate_price()
 
     # ── info ──
 
@@ -154,6 +213,20 @@ class UtilityMeter:
         for key, value in defaults.items():
             self._props.add_property_from_dict("status", {"id": key, "type": type(value), "value": value})
 
+    # ── grid / demand / power-quality (scalar measurement capabilities) ──
+
+    def _populate_scalars(self, group: str):
+        """Seed a scalar-measurement capability's properties from config.
+
+        Optional utility-meter capabilities (`grid`, `demand`, `power-quality`)
+        that a meter publishes only when it senses them. The example seeds
+        representative values from config; a real meter would drive these from
+        its measurement hardware. Datatype/unit/`$format` come from
+        `HOMIE_PROPERTY_HINTS`; the published set is whatever config supplies.
+        """
+        for key, value in self._config.get(group, {}).items():
+            self._props.add_property_from_dict(group, {"id": key, "type": type(value), "value": value})
+
     # ── doe ──
 
     def _populate_doe(self):
@@ -173,34 +246,12 @@ class UtilityMeter:
                 )
 
     def set_doe_import_limit(self, envelopes):
-        """Set the import-side DOE schedule atomically. See `_set_doe`."""
-        self._set_doe("import-limit", envelopes)
+        """Set the import-side DOE schedule atomically. See `_set_json_schedule`."""
+        self._set_json_schedule("doe", "import-limit", envelopes)
 
     def set_doe_export_limit(self, envelopes):
-        """Set the export-side DOE schedule atomically. See `_set_doe`."""
-        self._set_doe("export-limit", envelopes)
-
-    def _set_doe(self, direction: str, envelopes):
-        """
-        Set one direction's DOE envelope as a single `json` array, atomically.
-
-        `envelopes` is a single envelope dict, a list of envelope dicts (the
-        retained schedule), or None to clear the signal. A dict is wrapped in
-        a one-element array. Setting None retracts the retained topic, which
-        the data model treats as absence (no meter-signaled limit for that
-        direction). The whole array is one retained value, so each update is a
-        single atomic transaction — the whole point of the json-per-direction
-        model over parallel scalar topics.
-        """
-        if direction not in DOE_DIRECTIONS:
-            raise ValueError(f"unknown doe direction: {direction}")
-        if envelopes is None:
-            value = None
-        elif isinstance(envelopes, dict):
-            value = [envelopes]
-        else:
-            value = list(envelopes)
-        self._set_or_clear("doe", direction, value, "json")
+        """Set the export-side DOE schedule atomically. See `_set_json_schedule`."""
+        self._set_json_schedule("doe", "export-limit", envelopes)
 
     def _set_or_clear(self, group, prop_id, value, py_type):
         try:
@@ -212,6 +263,39 @@ class UtilityMeter:
                 self._props.add_property_from_dict(group, {"id": prop_id, "type": py_type, "value": value})
         else:
             existing.set_value(value)
+
+    # ── price ──
+
+    def _populate_price(self):
+        """Initial price schedules from config (`price.import-price` /
+        `price.export-price`), each a JSON array of price-window objects. Like
+        `doe`, publish-on-change: a direction with no signal simply omits the
+        property. See `capabilities/price.md`."""
+        price = self._config.get("price", {})
+        for direction in PRICE_DIRECTIONS:
+            windows = price.get(direction)
+            if windows:
+                self._props.add_property_from_dict("price", {"id": direction, "type": "json", "value": list(windows)})
+
+    def set_import_price(self, windows):
+        """Set the import-price schedule atomically. See `_set_json_schedule`."""
+        self._set_json_schedule("price", "import-price", windows)
+
+    def set_export_price(self, windows):
+        """Set the export-price schedule atomically. See `_set_json_schedule`."""
+        self._set_json_schedule("price", "export-price", windows)
+
+    def _set_json_schedule(self, group: str, prop_id: str, items):
+        """Set one json-array schedule property (doe envelope / price window)
+        atomically. `items` is a single object, a list of them, or None to
+        clear. Shared by the doe and price runtime-update paths."""
+        if items is None:
+            value = None
+        elif isinstance(items, dict):
+            value = [items]
+        else:
+            value = list(items)
+        self._set_or_clear(group, prop_id, value, "json")
 
     # ── tick (periodic synthetic update) ──
 
@@ -260,12 +344,14 @@ HOMIE_PROPERTY_HINTS: Dict[str, Dict[str, Dict[str, Any]]] = {
         "meter-class": {"datatype": homie.PropertyDatatype.STRING},
         "phases": {"datatype": homie.PropertyDatatype.INTEGER},
         "neutral-connected": {"datatype": homie.PropertyDatatype.BOOLEAN},
-        "nominal-frequency": {
-            "datatype": homie.PropertyDatatype.FLOAT,
-            "unit": homie.Unit.HERTZ,
-        },
-        # TODO add the remaining `info` properties from the eBus
-        # utility-meter data model as the scaffold matures.
+        "nominal-frequency": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.HERTZ},
+        "nominal-phase-angle": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.DEGREE},
+        "nominal-voltage-line-to-line": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.VOLTS},
+        "nominal-voltage-line-to-neutral": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.VOLTS},
+        "calculation-convention": {"datatype": homie.PropertyDatatype.ENUM, "format": "ARITHMETIC,VECTORIAL"},
+        "ct-ratio": {"datatype": homie.PropertyDatatype.FLOAT},
+        "pt-ratio": {"datatype": homie.PropertyDatatype.FLOAT},
+        "register-multiplier": {"datatype": homie.PropertyDatatype.FLOAT},
     },
     "meter": {
         "active-power": {
@@ -284,26 +370,60 @@ HOMIE_PROPERTY_HINTS: Dict[str, Dict[str, Dict[str, Any]]] = {
             "datatype": homie.PropertyDatatype.FLOAT,
             "unit": homie.Unit.WATT_HOUR,
         },
-        "voltage-a": {
-            "datatype": homie.PropertyDatatype.FLOAT,
-            "unit": homie.Unit.VOLTS,
-        },
-        "current-a": {
-            "datatype": homie.PropertyDatatype.FLOAT,
-            "unit": homie.Unit.AMPERE,
-        },
-        # TODO add voltage-b / current-b / etc. as the synthetic model grows.
+        "voltage-a": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.VOLTS},
+        "voltage-b": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.VOLTS},
+        "voltage-c": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.VOLTS},
+        "current-a": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.AMPERE},
+        "current-b": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.AMPERE},
+        "current-c": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.AMPERE},
+        # A utility meter MAY publish the full per-phase + derived matrix
+        # (reactive/apparent power, power-factor, per-phase energy); this scaffold
+        # publishes a representative subset. See capabilities/meter.md.
     },
     "status": {
-        "communication-state": {"datatype": homie.PropertyDatatype.ENUM},
-        "time-sync-state": {"datatype": homie.PropertyDatatype.ENUM},
-        "tamper-state": {"datatype": homie.PropertyDatatype.ENUM},
+        "communication-state": {"datatype": homie.PropertyDatatype.ENUM, "format": "OK,DEGRADED,LOST,UNKNOWN"},
+        "time-sync-state": {"datatype": homie.PropertyDatatype.ENUM, "format": "LOCKED,UNLOCKED,NONE,UNKNOWN"},
+        "tamper-state": {"datatype": homie.PropertyDatatype.ENUM, "format": "NORMAL,TAMPER_DETECTED,UNKNOWN"},
+        "reverse-energy-flag": {"datatype": homie.PropertyDatatype.BOOLEAN},
+        "internal-temperature": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.DEGREE_CELSIUS},
+    },
+    "grid": {
+        "grid-state": {"datatype": homie.PropertyDatatype.ENUM, "format": "UP,DOWN,DEGRADED,UNKNOWN"},
+        "last-outage-time": {"datatype": homie.PropertyDatatype.DATETIME},
+        "last-restoration-time": {"datatype": homie.PropertyDatatype.DATETIME},
     },
     "doe": {
-        # Two json properties, one per direction; each value is a JSON array
-        # of time-windowed envelope objects. Publish-only (no /set).
-        "import-limit": {"datatype": homie.PropertyDatatype.JSON},
-        "export-limit": {"datatype": homie.PropertyDatatype.JSON},
+        # Two json properties, one per direction; each value is a JSON array of
+        # time-windowed envelope objects, constrained by the $format JSONSchema.
+        # Publish-only (no /set); driven at runtime by the HTTP endpoint.
+        "import-limit": {"datatype": homie.PropertyDatatype.JSON, "format": DOE_LIMIT_FORMAT_STR},
+        "export-limit": {"datatype": homie.PropertyDatatype.JSON, "format": DOE_LIMIT_FORMAT_STR},
+    },
+    "price": {
+        # Two json properties, one per direction; each a JSON array of
+        # time-windowed price-window objects, constrained by the $format schema.
+        "import-price": {"datatype": homie.PropertyDatatype.JSON, "format": PRICE_FORMAT_STR},
+        "export-price": {"datatype": homie.PropertyDatatype.JSON, "format": PRICE_FORMAT_STR},
+    },
+    "demand": {
+        "integration-window": {"datatype": homie.PropertyDatatype.INTEGER, "unit": homie.Unit.SECONDS},
+        "current-interval-demand": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.WATT},
+        "previous-interval-demand": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.WATT},
+        "peak-demand-this-period": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.WATT},
+        "peak-demand-time": {"datatype": homie.PropertyDatatype.DATETIME},
+        "peak-demand-reset-time": {"datatype": homie.PropertyDatatype.DATETIME},
+    },
+    "power-quality": {
+        "thd-voltage-a": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "thd-voltage-b": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "thd-voltage-c": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "thd-current-a": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "thd-current-b": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "thd-current-c": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "tdd-current-a": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "tdd-current-b": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "tdd-current-c": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
+        "voltage-unbalance": {"datatype": homie.PropertyDatatype.FLOAT, "unit": homie.Unit.PERCENT},
     },
 }
 
@@ -396,6 +516,9 @@ class UtilityMeterAdapter:
                 property_dict["datatype"] = inferred
         if "unit" in hint:
             property_dict["unit"] = hint["unit"]
+        if "format" in hint:
+            # $format: a JSONSchema (json properties) or an enum value list.
+            property_dict["format"] = hint["format"]
         homie_property = node.add_property_from_dict(property_dict)
         self._meter.add_property_on_change_callback(
             meter_group,
@@ -441,11 +564,12 @@ class UtilityMeterAdapter:
             "meter",
         )
         self._add_capability_node("status", CAPABILITY_STATUS, "Meter operational state", "status")
+        self._add_capability_node("grid", CAPABILITY_GRID, "Utility supply health", "grid")
+        self._add_capability_node("doe", CAPABILITY_DOE, "Utility-signalled operating envelope", "doe")
+        self._add_capability_node("price", CAPABILITY_PRICE, "Utility-signalled dynamic price", "price")
+        self._add_capability_node("demand", CAPABILITY_DEMAND, "Peak-average demand", "demand")
         self._add_capability_node(
-            "doe",
-            CAPABILITY_DOE,
-            "Utility-signalled operating envelope",
-            "doe",
+            "power-quality", CAPABILITY_POWER_QUALITY, "Power-quality measurements", "power-quality"
         )
         # Observe runtime property additions so values arriving after
         # device startup (typical for doe via the HTTP endpoint) are
@@ -459,47 +583,36 @@ class UtilityMeterAdapter:
 # ─── DOE HTTP endpoint ────────────────────────────────────────────────────────
 
 
-# Map POST path to the doe direction it drives.
-_DOE_PATHS = {
-    "/doe/import-limit": "import-limit",
-    "/doe/export-limit": "export-limit",
+# Map POST path to (UtilityMeter setter method, the property's $format schema).
+# Both doe and price are json-array schedules driven out of band; here the HTTP
+# endpoint stands in for the utility backhaul.
+_SCHEDULE_PATHS = {
+    "/doe/import-limit": ("set_doe_import_limit", DOE_LIMIT_FORMAT),
+    "/doe/export-limit": ("set_doe_export_limit", DOE_LIMIT_FORMAT),
+    "/price/import-price": ("set_import_price", PRICE_FORMAT),
+    "/price/export-price": ("set_export_price", PRICE_FORMAT),
 }
 
 
-def _validate_doe_body(body: Any) -> Optional[list]:
-    """
-    Normalize and lightly validate a posted DOE body into an envelope array
-    (or None to clear).
+def _normalize_and_validate(body: Any, schema: dict) -> Optional[list]:
+    """Normalize a posted json body into a schedule array and validate it.
 
-    Accepts None (clear), a single envelope object, or an array of them.
-    Enforces the data-model invariants that are cheap to check here: at least
-    one of `power-limit` / `apparent-power-limit` present and a non-negative
-    integer, and `source` (if present) one of the defined enum values. Raises
-    ValueError on a malformed body. Time-window sanity (ISO-8601, ordering) is
-    left to the utility backhaul that would drive this in production.
+    Accepts None (clear the signal), a single object, or an array of objects; a
+    lone object is wrapped in a one-element array. The normalized array is
+    validated against the property's `$format` JSONSchema with the SDK's
+    `homie.validate_json_format` (the same schema the property advertises), which
+    is a graceful no-op when the optional `jsonschema` package is not installed.
+    Raises ValueError on a malformed or schema-invalid body.
     """
     if body is None:
         return None
-    envelopes = [body] if isinstance(body, dict) else body
-    if not isinstance(envelopes, list):
-        raise ValueError("body must be an envelope object, an array, or null")
-    for i, env in enumerate(envelopes):
-        if not isinstance(env, dict):
-            raise ValueError(f"envelope[{i}] must be an object")
-        has_limit = False
-        for key in ("power-limit", "apparent-power-limit"):
-            if key not in env:
-                continue
-            has_limit = True
-            v = env[key]
-            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
-                raise ValueError(f"envelope[{i}].{key} must be a non-negative integer")
-        if not has_limit:
-            raise ValueError(f"envelope[{i}] must have power-limit or apparent-power-limit")
-        source = env.get("source")
-        if source is not None and source not in DOE_SOURCES:
-            raise ValueError(f"envelope[{i}].source must be one of {sorted(DOE_SOURCES)}")
-    return envelopes
+    items = [body] if isinstance(body, dict) else body
+    if not isinstance(items, list):
+        raise ValueError("body must be an object, an array, or null")
+    error = homie.validate_json_format(items, schema)
+    if error is not None:
+        raise ValueError(error)
+    return items
 
 
 class _DoeRequestHandler(BaseHTTPRequestHandler):
@@ -516,13 +629,11 @@ class _DoeRequestHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self):
-        direction = _DOE_PATHS.get(self.path)
-        if direction is None:
-            self._reply(
-                HTTPStatus.NOT_FOUND,
-                {"error": "unknown path", "known": sorted(_DOE_PATHS)},
-            )
+        entry = _SCHEDULE_PATHS.get(self.path)
+        if entry is None:
+            self._reply(HTTPStatus.NOT_FOUND, {"error": "unknown path", "known": sorted(_SCHEDULE_PATHS)})
             return
+        setter_name, schema = entry
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode("utf-8") if length else ""
         try:
@@ -532,25 +643,18 @@ class _DoeRequestHandler(BaseHTTPRequestHandler):
             self._reply(HTTPStatus.BAD_REQUEST, {"error": f"invalid json: {exc}"})
             return
         try:
-            envelopes = _validate_doe_body(body)
+            items = _normalize_and_validate(body, schema)
         except ValueError as exc:
             self._reply(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
-        setter = self.meter.set_doe_import_limit if direction == "import-limit" else self.meter.set_doe_export_limit
         try:
-            setter(envelopes)
+            getattr(self.meter, setter_name)(items)
         except Exception as exc:
             self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
             return
         self._reply(
             HTTPStatus.OK,
-            {
-                "applied": {
-                    "direction": direction,
-                    "envelopes": envelopes,
-                    "at": datetime.now(timezone.utc).isoformat(),
-                }
-            },
+            {"applied": {"path": self.path, "items": items, "at": datetime.now(timezone.utc).isoformat()}},
         )
 
     def _reply(self, status: HTTPStatus, payload: dict):
@@ -567,8 +671,8 @@ def start_doe_endpoint(meter: UtilityMeter, port: int) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    logging.getLogger("DoeEndpoint").info(
-        "reason=doeEndpointReady,port=%d,paths=%s", port, ",".join(sorted(_DOE_PATHS))
+    logging.getLogger("ScheduleEndpoint").info(
+        "reason=scheduleEndpointReady,port=%d,paths=%s", port, ",".join(sorted(_SCHEDULE_PATHS))
     )
     return server
 

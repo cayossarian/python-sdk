@@ -22,7 +22,7 @@ Controller that auto-discovers Homie devices and monitors property changes.
 
 ### utility-meter
 
-Publishes a single eBus utility-meter device (`energy.ebus.device.utility-meter`, per the Electrification Bus `data-models/utility-meter.md`) with the standard `info` / `meter` / `status` / `doe` capabilities. The `doe` capability is two `json` properties (`doe/import-limit`, `doe/export-limit`), each a JSON array of time-windowed envelope objects. A local HTTP endpoint stands in for the utility's out-of-band backhaul for runtime DOE updates (`POST /doe/import-limit`, `POST /doe/export-limit`).
+Publishes a single eBus utility-meter device (`energy.ebus.device.utility-meter`, per the Electrification Bus `data-models/utility-meter.md`, v0.3) with the data model's capabilities: the required `info` / `meter` / `status` plus the optional `grid` / `doe` / `price` / `demand` / `power-quality` a meter publishes when it has the signal. The `doe` and `price` capabilities are `json` properties (`doe/import-limit`/`export-limit`, `price/import-price`/`export-price`), each a JSON array of time-windowed objects that advertises its schema as a `$format` JSONSchema; enum properties advertise their allowed values via `$format`. A local HTTP endpoint stands in for the utility's out-of-band backhaul for runtime doe/price updates, validating each posted body against the property's `$format` before publish (install the `validation` extra to enable it: `pip install 'ebus-sdk[validation]'`).
 
 ```bash
 ./utility-meter --config ./utility-meter-cfg.example.json --broker-config /path/to/broker-cfg.json
@@ -44,7 +44,7 @@ curl -X POST http://localhost:8765/doe/import-limit \
   -d '[{"power-limit": 12000, "source": "GRID", "start-time": "2026-07-01T16:00:00Z", "end-time": "2026-07-01T20:00:00Z"}]'
 ```
 
-Envelope fields: `power-limit` (integer W) and/or `apparent-power-limit` (integer VA) — at least one required; `source` (one of `CONTRACT` / `REGULATOR` / `EQUIPMENT` / `GRID` / `UNKNOWN`, optional); `start-time` / `end-time` (ISO-8601 UTC, optional). POST an empty body or `null` to clear the signal for that direction. The same shape is served at `/doe/export-limit`.
+Envelope fields: `power-limit` (integer W) and/or `apparent-power-limit` (integer VA) — at least one required; `source` (one of `CONTRACT` / `REGULATOR` / `EQUIPMENT` / `GRID` / `UNKNOWN`, optional); `start-time` / `end-time` (ISO-8601 UTC, optional). POST an empty body or `null` to clear the signal for that direction. The same shape is served at `/doe/export-limit`, and the price schedules at `/price/import-price` and `/price/export-price` (price-window objects: `price` + `currency`, `price-level`, `source`, `start-time` / `end-time`). A body that violates the property's `$format` schema is rejected with `400` and the validation error.
 
 ### simple-span-controller
 
