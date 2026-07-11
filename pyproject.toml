@@ -25,8 +25,10 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
 ]
 dependencies = [
+    # MQTT transport lives in ebus-mqtt-client, which pins paho-mqtt; the SDK
+    # does not import paho directly, so paho is a transitive dependency (not
+    # declared here).
     "ebus-mqtt-client>=0.1.7",
-    "paho-mqtt>=1.5.0",
 ]
 
 [project.optional-dependencies]

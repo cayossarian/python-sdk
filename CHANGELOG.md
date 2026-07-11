@@ -4,6 +4,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Packaging: dropped the redundant direct `paho-mqtt` dependency. The SDK does not import paho directly (MQTT transport lives entirely in `ebus-mqtt-client`, which pins `paho-mqtt`), so paho is now purely transitive. No change to what gets installed. README requirements corrected to list `ebus-mqtt-client` (and the optional `mdns` / `validation` extras) instead of a stale `paho-mqtt` version.
+
 ## [0.10.0] — 2026-07-11
 
 ### Added

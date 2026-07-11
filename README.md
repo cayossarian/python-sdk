@@ -246,7 +246,12 @@ See [`examples/README.md`](examples/README.md) for example scripts demonstrating
 ## Requirements
 
 - Python 3.10+
-- paho-mqtt >= 1.6.1
+- [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client) >= 0.1.7 (the MQTT transport layer; it pins `paho-mqtt`, so the SDK does not depend on paho directly)
+
+Optional extras:
+
+- `mdns` (`zeroconf`) — mDNS broker discovery, used by the SPAN Panel controller example
+- `validation` (`jsonschema`) — `$format` JSONSchema validation for `json`-datatype properties; absent it, validation is gracefully skipped
 
 ## Releases
 
