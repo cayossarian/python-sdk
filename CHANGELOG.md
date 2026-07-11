@@ -4,6 +4,8 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-11
+
 ### Added
 
 - `Unit` enum: apparent- and reactive-power/energy units for the `meter` capability, so a meter proxy (revenue meter, EKM, eGauge, BESS AC boundary) can set the correct unit on those properties instead of dropping them (GH #6). New members `VOLT_AMPERE` (`VA`), `VOLT_AMPERE_HOUR` (`VAh`), and `VOLT_AMPERE_REACTIVE_HOUR` (`varh`) join the existing `VOLT_AMPERE_REACTIVE` (`var`). Casing follows IEC 80000-6 (the same SI-symbol style the Homie convention uses): apparent uppercase `VA`/`VAh`, reactive lowercase `var`/`varh`. The HA discovery bridge's inbound unit table maps these (and the `k`-prefixed variants) as well.
@@ -168,7 +170,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.11.0
 [0.10.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.10.0
 [0.9.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.9.0
 [0.8.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.8.0
