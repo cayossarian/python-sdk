@@ -4,6 +4,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Release/packaging: the version is now single-sourced from `__version__` in `src/ebus_sdk/__init__.py`. `pyproject.toml` reads it dynamically (`[tool.setuptools.dynamic]`) and the `setup.py` Yocto/kirkstone shim parses the same literal, so the three former hand-maintained copies can no longer drift; the publish workflow additionally guards the git tag against it (a `v` + `__version__` mismatch fails the run before anything is published). No consumer-visible change; see the new README `## Releasing` section.
+
 ## [0.11.0] — 2026-07-11
 
 ### Added

@@ -257,6 +257,17 @@ Optional extras:
 
 See [CHANGELOG.md](CHANGELOG.md). 0.2.0 introduces parent/child device trees and contains breaking changes to the `Device` constructor — see the changelog entry before upgrading from 0.1.x.
 
+## Releasing
+
+The version has a single source of truth: `__version__` in `src/ebus_sdk/__init__.py`. `pyproject.toml` reads it dynamically and the `setup.py` shim (Yocto/kirkstone path) parses the same literal, so they cannot drift. To cut a release:
+
+1. Bump `__version__` in `src/ebus_sdk/__init__.py` (the only place), and finalize the `CHANGELOG.md` entry.
+2. Commit it: `git commit -am "Release X.Y.Z"`.
+3. Tag it to match, `v`-prefixed: `git tag vX.Y.Z`.
+4. Push the tag: `git push GitHub vX.Y.Z` (a plain `git push` does not trigger a release).
+
+Pushing a `v*` tag runs the publish workflow, which verifies the tag equals `v` + `__version__` (a mismatch fails the run before anything is published), builds the sdist and wheel, and publishes to PyPI via Trusted Publishing. See the [version single-source-of-truth convention](https://github.com/electrification-bus/specification/blob/main/conventions/version-single-source.md).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to file Discussions, Issues, and pull requests. Pure MQTT-transport changes (TLS, auth, paho upgrades) belong in [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client), not here. Normative behavior tracks the [Electrification Bus specification](https://github.com/electrification-bus/specification).

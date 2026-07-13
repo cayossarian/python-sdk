@@ -29,6 +29,12 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
+      # Refuse to publish an artifact whose version disagrees with the tag.
+      - name: Verify tag matches package version
+        run: |
+          pkg="v$(python -c 'import re,pathlib; print(re.search(r"__version__ = \"([^\"]+)\"", pathlib.Path("src/ebus_sdk/__init__.py").read_text()).group(1))')"
+          echo "tag=${GITHUB_REF_NAME} package=${pkg}"
+          test "${pkg}" = "${GITHUB_REF_NAME}"
       - run: pip install build
       - run: python -m build
       - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
