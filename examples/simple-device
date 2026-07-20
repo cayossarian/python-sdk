@@ -7,20 +7,15 @@ import argparse
 import json
 import logging
 import os
-import collections
 import threading
 import sys
 import uuid
-from ebus_sdk import Device, Node, Property, DeviceState, PropertyDatatype, Unit
 from ebus_sdk import set_homie_property_from_python_property
 from ebus_sdk.property import Property, GroupedPropertyDict
 from ebus_sdk import homie  # For datatype_from_type and constants
-from ebus_sdk.homie import EBUS_HOMIE_DOMAIN, EBUS_HOMIE_VERSION_MAJOR
 from functools import partial
-from typing import List, Dict, Callable, Optional, Any
-
-# TODO debug only, remove
-from pprint import pp, pformat
+from typing import Dict, Callable, Optional, Any
+from pprint import pformat
 
 
 class ExampleDevice:
@@ -120,6 +115,11 @@ class ExampleDeviceAdapter:
             return {}
 
     def create_homie_device(self) -> homie.Device:
+        # Construction is resilient to a briefly-unavailable broker (the transport
+        # connects asynchronously), so this does NOT raise merely because the
+        # broker is momentarily down. A genuine config fault (a malformed
+        # mqtt_cfg or an unreadable TLS cert) does raise, though: surface it
+        # rather than pressing on with a half-built device.
         try:
             homie_device = homie.Device(
                 "33A3D78A3D78",  # TODO: get this from somewhere
@@ -128,7 +128,8 @@ class ExampleDeviceAdapter:
                 mqtt_cfg=self._mqtt_cfg,
             )
         except Exception as e:
-            self._logger.warning(f"reason=createHomieDeviceException,e={e}")
+            self._logger.error(f"reason=createHomieDeviceException,e={e}")
+            raise
 
         homie_device.start_mqtt_client()
         return homie_device
