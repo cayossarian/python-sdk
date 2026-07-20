@@ -4,9 +4,21 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-20
+
+### Fixed
+
+- Resilient broker connect, end to end. A root `Device` constructed while the broker is briefly unavailable (startup, restart, network blip) now comes up correctly instead of as a silent, dead-but-"running" publisher. This required two coordinated fixes. (1) The MQTT transport (`ebus-mqtt-client` 0.1.8) now connects asynchronously (`connect_async`) so construction no longer raises `ConnectionRefusedError` on a down broker and no longer leaves a never-connecting client; the link is established (and retried with backoff) on the network loop when the broker appears. (2) `Device.on_connect()` now republishes the **complete** tree — every device's `$description`, nodes, property values, and `$state` — on the **initial** connect, not just node values. Previously the initial connect published only node values and assumed `$state`/`$description` had already been published by the construction-time state transition; with an asynchronous connect that assumption fails when the broker was down at construction, so a device could appear on the bus half-published (nodes present, `$state`/`$description` missing) — which a Homie consumer sees as broken. The initial-connect republish is now as complete as the reconnect republish (`refresh_tree`, idempotent, cascading to any children constructed before the first connect). The redundant republish on a broker that was already up at construction is harmless (retained, idempotent).
+- `Device.connect_broker()` no longer swallows a genuine construction fault into a silent `mqttc=None`. Now that a down broker no longer raises (it is handled by the asynchronous connect), any exception from constructing the MQTT client signals a real fault — a malformed `mqtt_cfg` or an unreadable TLS certificate — and is **re-raised** out of `Device(...)` so it surfaces immediately, rather than yielding a dead publisher whose every publish is a no-op. Consumers that prefer the previous swallow-and-continue behavior can wrap construction in `try`/`except`. A correctly-configured device is unaffected (construction never raised for it before and still does not).
+
+### Added
+
+- `Device.is_connected()`: observe whether this device tree's MQTT link is up. Because the connection is now asynchronous, the link is not up the instant a `Device` is constructed — `is_connected()` returns `False` between construction and the first successful connect (and while disconnected between reconnect attempts), then `True` once connected. Children share the root's connection, so for any device in the tree this reflects the root's link. Consumers that must not publish before the link is up can gate on it; publishing anyway is safe (values are retained and `on_connect()` republishes the whole tree once connected).
+
 ### Changed
 
-- Release/packaging: the version is now single-sourced from `__version__` in `src/ebus_sdk/__init__.py`. `pyproject.toml` reads it dynamically (`[tool.setuptools.dynamic]`) and the `setup.py` Yocto/kirkstone shim parses the same literal, so the three former hand-maintained copies can no longer drift; the publish workflow additionally guards the git tag against it (a `v` + `__version__` mismatch fails the run before anything is published). No consumer-visible change; see the new README `## Releasing` section.
+- Dependency floor: `ebus-mqtt-client>=0.1.8` (was `>=0.1.7`), for the asynchronous (`connect_async`) construction that decouples a `Device` from broker availability and backs the resilient-connect fix above.
+- Release/packaging: the version is now single-sourced from `__version__` in `src/ebus_sdk/__init__.py`. `pyproject.toml` reads it dynamically (`[tool.setuptools.dynamic]`) and the `setup.py` Yocto/kirkstone shim parses the same literal, so the three former hand-maintained copies can no longer drift; the publish workflow additionally guards the git tag against it (a `v` + `__version__` mismatch fails the run before anything is published). No consumer-visible change; see the README `## Releasing` section.
 
 ## [0.11.0] — 2026-07-11
 

@@ -1400,6 +1400,23 @@ class Device:
         if not root.mqttc.is_running:
             root.mqttc.start()
 
+    def is_connected(self) -> bool:
+        """
+        True when this device tree's MQTT link is up.
+
+        Because ebus-mqtt-client connects asynchronously (connect_async on the
+        network loop started by start_mqtt_client()), the link is not up the
+        instant a Device is constructed: is_connected() returns False between
+        construction and the first successful connect (and while disconnected
+        between reconnect attempts), then True once connected. Children share the
+        root's connection, so for any device in the tree this reflects the root's
+        link. A consumer that must not publish before the link is up can gate on
+        this; publishing anyway is safe — values are retained and on_connect()
+        republishes the whole tree once the link comes up.
+        """
+        mqttc = self.root().mqttc
+        return bool(mqttc and mqttc.is_connected())
+
     def stop(self, *, flush_timeout: float = 1.0, stop_timeout: float = 2.0) -> None:
         """Gracefully and promptly tear down this device tree's MQTT connection.
 
@@ -1877,29 +1894,52 @@ class Device:
         Called when the root device's MQTT connection (re-)opens. Only roots
         register a connection — children share, so this only fires on the root.
 
-        Initial connection: publish own nodes (FIX for G3P-19041); children
-        constructed later publish themselves via state_transition + add_node.
+        Republishes the ENTIRE tree — every device's $description, nodes,
+        property values, and $state — on BOTH the initial connect and every
+        reconnect, via refresh_tree() (which is idempotent).
 
-        Reconnect: walk the entire tree and republish every device's
-        description, nodes, property values, and $state (S6).
+        The initial connect must be as complete as a reconnect because the
+        broker connection is asynchronous (ebus-mqtt-client connect_async): a
+        root Device can be constructed while the broker is briefly unavailable,
+        in which case the construction-time state_transition publishes
+        ($state=init -> $description -> $state=ready) never reached the broker.
+        Publishing only node values here (the earlier behavior) would then leave
+        a HALF-PUBLISHED device — nodes present but $state/$description missing —
+        which a Homie consumer sees as broken. refresh_tree() also recurses to
+        any children constructed before this first connect. On a reconnect it
+        re-establishes retained state the broker may have dropped (S6). The
+        redundant republish on a broker that WAS up at construction time is
+        harmless: the publishes are retained and idempotent.
         """
-        logger.info(f"reason=deviceOnConnectInvocation,initialBrokerConnection={self.initial_broker_connection}")
-        if self.initial_broker_connection:
-            self.initial_broker_connection = False
-            # Also publish nodes on initial connection, FIX for G3P-19041
-            self.publish_nodes()
-        else:
-            logger.info(
-                f"reason=deviceRepublishingAfterReconnect,rootId={self._id},"
-                f"nodeCount={len(self._nodes)},childCount={len(self._children)}"
-            )
-            self.refresh_tree()
+        logger.info(
+            f"reason=deviceOnConnectInvocation,initialBrokerConnection={self.initial_broker_connection},"
+            f"rootId={self._id},nodeCount={len(self._nodes)},childCount={len(self._children)}"
+        )
+        # The initial-vs-reconnect flag is now observability only — both paths do
+        # the same complete republish. Clearing it keeps the log honest.
+        self.initial_broker_connection = False
+        self.refresh_tree()
 
     def connect_broker(self) -> None:
         """
         Connect to MQTT broker using configuration from mqtt_cfg.
         Only called on root devices — children share the root's connection
         and skip this entirely (no own MqttClient, no per-child LWT).
+
+        Construction is resilient to a briefly-unavailable broker: ebus-mqtt-client
+        (>=0.1.8) registers the target with connect_async and establishes the link
+        on its own network loop (started by start_mqtt_client()), retrying with
+        backoff until the broker appears. A broker that is down or unreachable at
+        construction time therefore does NOT raise here and does NOT leave a
+        silent, never-connecting client; observe when the link is up via
+        is_connected().
+
+        Because the down-broker case no longer reaches this except clause, any
+        exception that from_config still raises now signals a GENUINE
+        construction fault (e.g. a malformed mqtt_cfg or an unreadable TLS
+        certificate). We RE-RAISE it rather than swallow: a silent mqttc=None
+        would hide a real failure from every caller and yield a
+        dead-but-"running" publisher.
         """
         if self._parent is not None:
             # Children share the root's MQTT connection.
@@ -1918,8 +1958,9 @@ class Device:
                 lwt=lwt,
                 on_connect_callback=partial(self.on_connect),
             )
-        except Exception as e:
-            logger.warning(f"reason=deviceConnectBrokerException,e={e}")
+        except Exception:
+            logger.exception(f"reason=deviceConnectBrokerFailed,id={self._id}")
+            raise
 
 
 def ebus_cfg_add_auth(cfg, username, password):

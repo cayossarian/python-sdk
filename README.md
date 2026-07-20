@@ -46,6 +46,10 @@ device.start_mqtt_client()
 temp.set_value(23.5)
 ```
 
+#### Resilient connect
+
+Constructing a `Device` never blocks or fails just because the broker is momentarily unreachable (startup, restart, a network blip). The connection is opened asynchronously on the network loop that `start_mqtt_client()` starts, and retried with backoff until the broker appears; when it connects, the SDK publishes the device's complete state (`$state`, `$description`, nodes, and property values), so a device built against a down broker comes up fully published rather than half-published. You can publish before the link is up (values are retained and re-published on connect), or gate on `device.is_connected()` if you must not publish until connected. A genuinely bad configuration (a malformed `mqtt_cfg` or an unreadable TLS certificate) still fails fast: it raises out of the `Device(...)` constructor rather than leaving a silent, dead publisher.
+
 #### Clearing a value vs. an empty-string value
 
 Homie 5 distinguishes two things that both look "empty" on the wire, and the SDK handles each automatically:
@@ -246,7 +250,7 @@ See [`examples/README.md`](examples/README.md) for example scripts demonstrating
 ## Requirements
 
 - Python 3.10+
-- [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client) >= 0.1.7 (the MQTT transport layer; it pins `paho-mqtt`, so the SDK does not depend on paho directly)
+- [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client) >= 0.1.8 (the MQTT transport layer; it pins `paho-mqtt`, so the SDK does not depend on paho directly. 0.1.8 adds the asynchronous, down-broker-tolerant connect the resilient-connect behavior relies on)
 
 Optional extras:
 

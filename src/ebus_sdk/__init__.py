@@ -78,7 +78,7 @@ from .topology import (
 # MQTT client
 from ebus_mqtt_client import MqttClient
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 __all__ = [
     # Homie classes

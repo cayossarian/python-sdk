@@ -30,8 +30,11 @@ classifiers = [
 dependencies = [
     # MQTT transport lives in ebus-mqtt-client, which pins paho-mqtt; the SDK
     # does not import paho directly, so paho is a transitive dependency (not
-    # declared here).
-    "ebus-mqtt-client>=0.1.7",
+    # declared here). Floor 0.1.8: the SDK's resilient-connect completeness
+    # (full tree republish on the first connect) depends on the client's
+    # connect_async construction, which construction-decouples from broker
+    # availability. Older clients raised ConnectionRefusedError on a down broker.
+    "ebus-mqtt-client>=0.1.8",
 ]
 
 [project.optional-dependencies]

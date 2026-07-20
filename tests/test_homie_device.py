@@ -1478,18 +1478,41 @@ class TestDevicePublish:
 
 
 class TestDeviceOnConnect:
-    def test_initial_connection(self, mock_paho):
-        device, mock_client = _make_device(mock_paho)
-        # After construction, initial_broker_connection is already set to False
-        # by the state_transition in __init__. Let's reset it.
+    def test_initial_connection_publishes_full_tree(self, mock_paho):
+        """Initial connect must publish the COMPLETE device — $description and
+        $state, not just node values. With an asynchronous (connect_async)
+        broker connection a device can be constructed while the broker is down,
+        so the construction-time $state/$description publishes never landed;
+        publishing only node values here would leave a half-published device."""
+        device, mock_client = _make_device(mock_paho, device_id="dev-1")
+        node = device.new_node("core", "Core", "sensor")
+        device.add_node(node)
         device.initial_broker_connection = True
-        mock_node = MagicMock()
-        device._nodes = {"core": mock_node}
+        mock_client.publish.reset_mock()
 
         device.on_connect()
 
         assert device.initial_broker_connection is False
-        mock_node.publish.assert_called_once()
+        topics = [c[0][0] for c in mock_client.publish.call_args_list]
+        assert any("/dev-1/$description" in t for t in topics), topics
+        assert any("/dev-1/$state" in t for t in topics), topics
+
+    def test_initial_connection_cascades_to_children(self, mock_paho):
+        """A child constructed before the first connect (possible when the
+        broker was down at construction time) must also be fully published when
+        that first connect finally arrives — the initial path cascades the whole
+        tree exactly like a reconnect."""
+        root, mock_client = _make_device(mock_paho, device_id="panel-1")
+        Device(id="circuit-a", parent=root)
+        root.initial_broker_connection = True
+        mock_client.publish.reset_mock()
+
+        root.on_connect()
+
+        topics = [c[0][0] for c in mock_client.publish.call_args_list]
+        assert any("/panel-1/$description" in t for t in topics), topics
+        assert any("/circuit-a/$description" in t for t in topics), topics
+        assert any("/circuit-a/$state" in t for t in topics), topics
 
     def test_reconnection(self, mock_paho):
         device, mock_client = _make_device(mock_paho)
@@ -1580,6 +1603,42 @@ class TestDeviceConnectBroker:
         with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
             device.connect_broker()
             mock_from_config.assert_not_called()
+
+    def test_connect_broker_reraises_genuine_fault(self, mock_paho):
+        """A genuine construction fault (malformed config, unreadable TLS cert)
+        must surface out of Device() rather than leaving a silent mqttc=None
+        zombie. The down-broker case no longer reaches this except clause — the
+        transport connects asynchronously and never raises on a down broker — so
+        an exception here is always a real fault worth failing fast on."""
+        with patch("ebus_sdk.homie.MqttClient.from_config", side_effect=ValueError("bad cfg")):
+            with pytest.raises(ValueError, match="bad cfg"):
+                Device(id="dev-x", mqtt_cfg={"host": "localhost", "port": 1883})
+
+
+class TestDeviceIsConnected:
+    def test_is_connected_true(self, mock_paho):
+        device, mock_client = _make_device(mock_paho)
+        mock_client.is_connected.return_value = True
+        assert device.is_connected() is True
+
+    def test_is_connected_false_when_link_down(self, mock_paho):
+        # Between construction and the first async connect, the link is down.
+        device, mock_client = _make_device(mock_paho)
+        mock_client.is_connected.return_value = False
+        assert device.is_connected() is False
+
+    def test_is_connected_false_when_no_client(self, mock_paho):
+        device, _ = _make_device(mock_paho)
+        device.mqttc = None
+        assert device.is_connected() is False
+
+    def test_is_connected_child_reflects_root(self, mock_paho):
+        root, mock_client = _make_device(mock_paho, device_id="panel-1")
+        child = Device(id="circuit-a", parent=root)
+        mock_client.is_connected.return_value = True
+        assert child.is_connected() is True
+        mock_client.is_connected.return_value = False
+        assert child.is_connected() is False
 
 
 class TestDeviceRefreshTree:
