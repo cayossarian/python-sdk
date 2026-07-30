@@ -24,7 +24,7 @@
   ],
   "implements": {
     "capabilities": { "info": "0.1", "meter": "0.1", "doe": "0.1", "price": "0.1" },
-    "data-models": { "utility-meter": "0.3" },
+    "devices": { "utility-meter": "0.3" },
     "registries": { "capability-types": "0.11", "device-types": "0.4" }
   },
   "notes": "role=library: the SDK provides the framework mechanisms (supports). Excluded framework features: broker-hosting (broker's concern, not the SDK) and rest-configuration (not implemented). mdns-discovery is provided via the optional `mdns` extra and the examples. The implements map reflects the examples/utility-meter reference publisher; its grid/status/demand/power-quality capabilities are defined inline in the utility-meter data model (covered by pinning utility-meter 0.3). If the simulators migrate out of examples/ into their own repo(s), each would carry its own application lockfile and this implements map would reduce to the SDK proper."

@@ -141,7 +141,7 @@ The declarations above are static: the property set is known up front (a water h
 
 ## Device topology: bridge root plus proxied children
 
-A proxy is not one flat device. Per the eBus [`proxy.md`](https://github.com/electrification-bus/specification/blob/main/data-models/proxy.md) convention:
+A proxy is not one flat device. Per the eBus [`proxy.md`](https://github.com/electrification-bus/specification/blob/main/devices/proxy.md) convention:
 
 - Publish a **bridge root device** of type `energy.ebus.device.bridge`. It owns the MQTT connection (and the Last Will) and carries an `info` capability whose `vendor-name` identifies the proxy publisher. It does not publish the proxied device's measurements itself.
 - Publish **one child device per proxied device**, each `Device(id=..., type=..., parent=root)`. The proxied measurements live here.
@@ -222,4 +222,4 @@ It works, and it is tempting because it is fewer lines at first. But it reinvent
 - [`declaration.py`](../src/ebus_sdk/declaration.py): `PropertySpec` and `build_from_declarations`.
 - [`adapter.py`](../src/ebus_sdk/adapter.py): the exported mirror helpers.
 - [`ebus_sdk.ha`](../src/ebus_sdk/ha/) and [`doc/ha-mqtt-discovery.md`](ha-mqtt-discovery.md): ingesting Home Assistant MQTT discovery.
-- eBus [`proxy.md`](https://github.com/electrification-bus/specification/blob/main/data-models/proxy.md): the normative proxier / device-id convention.
+- eBus [`proxy.md`](https://github.com/electrification-bus/specification/blob/main/devices/proxy.md): the normative proxier / device-id convention.
