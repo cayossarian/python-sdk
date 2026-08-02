@@ -1832,3 +1832,83 @@ class TestDeviceStop:
         device.mqttc = None
         device.stop()  # must not raise
         mock_client.stop.assert_not_called()
+
+
+class TestDeviceWithoutTransport:
+    """`mqtt_cfg=None` — the declared default — builds a device tree with no transport."""
+
+    def test_declared_default_constructs_without_raising(self):
+        """Regression: constructing with the documented default raised AttributeError.
+
+        `Device.__init__` called `connect_broker()` unconditionally for roots, so the
+        annotated `mqtt_cfg: Optional[dict] = None` reached
+        `MqttClient.from_config(None)` and died on `None.get("host", ...)`.
+        """
+        device = Device(id="no-transport", name="Passive", type="dev.test")
+
+        assert device.mqttc is None
+        assert device.id() == "no-transport"
+
+    def test_empty_cfg_still_connects(self):
+        """`mqtt_cfg={}` keeps its meaning: connect using ebus-mqtt-client's defaults.
+
+        Only `None` changes behaviour, and `None` previously raised — so no caller that
+        works today is affected.
+        """
+        with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
+            mock_from_config.return_value = _mock_mqtt_client()
+            device = Device(id="default-cfg", type="dev.test", mqtt_cfg={})
+
+        mock_from_config.assert_called_once()
+        assert device.mqttc is not None
+
+    def test_children_attach_to_a_transport_free_root(self):
+        """A root with no transport is transport-free by design, and so are its children."""
+        root = Device(id="root", type="dev.root")
+        child = Device(id="child", type="dev.child", parent=root)
+        grandchild = Device(id="grandchild", type="dev.child", parent=child)
+
+        assert [c.id() for c in root._children] == ["child"]
+        assert grandchild.root() is root
+        assert child.mqttc is None
+
+    def test_transport_free_tree_still_composes_descriptions(self):
+        """The model is fully usable — ids, nodes, $description, children — just silent."""
+        root = Device(id="root", name="Root", type="dev.root")
+        child = Device(id="child", name="Child", type="dev.child", parent=root)
+        node = child.add_node_from_dict({"id": "meter", "name": "meter", "type": "cap.meter"})
+        node.add_property_from_dict(
+            {"id": "active-power", "name": "P", "datatype": PropertyDatatype.FLOAT, "unit": Unit("W")}
+        )
+
+        root_desc = root.description()
+        child_desc = child.description()
+
+        assert root_desc["children"] == ["child"]
+        assert child_desc["parent"] == "root"
+        assert child_desc["root"] == "root"
+        assert child_desc["nodes"]["meter"]["properties"]["active-power"]["unit"] == "W"
+
+    def test_publishing_on_a_transport_free_tree_is_a_noop(self, caplog):
+        """No client means no writes — and no exceptions."""
+        root = Device(id="root", type="dev.root")
+        node = root.add_node_from_dict({"id": "meter", "name": "meter", "type": "cap.meter"})
+        prop = node.add_property_from_dict({"id": "active-power", "name": "P", "datatype": PropertyDatatype.FLOAT})
+
+        prop.set_value(42.0)  # must not raise
+        root.stop()  # must not raise
+
+    def test_guard_still_fires_when_a_configured_root_has_no_client(self):
+        """The original guard's real target: a root that was given a config and has none.
+
+        That is the "never started, or already stopped" mistake, and it must still raise —
+        only the transport-free-by-design case is now allowed through.
+        """
+        with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
+            mock_from_config.return_value = _mock_mqtt_client()
+            root = Device(id="configured", type="dev.root", mqtt_cfg={"host": "localhost"})
+
+        root.mqttc = None  # e.g. after stop()
+
+        with pytest.raises(RuntimeError, match="has no MQTT client"):
+            Device(id="child", type="dev.child", parent=root)

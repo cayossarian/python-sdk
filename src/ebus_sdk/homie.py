@@ -1205,6 +1205,14 @@ class Device:
                             "password": "SECRET"}}
 
     homie_domains config for future use, not currently supported by this code
+
+    mqtt_cfg={} connects using ebus-mqtt-client's defaults. mqtt_cfg=None opens no socket:
+    the tree still composes $description and resolves ids and topics, it just never
+    publishes — for tests, schema derivation, and hosts that publish through their own
+    client.
+
+        panel = Device(id="panel-1", type="...")
+        circuit = Device(id="circuit-1", type="...", parent=panel)
     """
 
     def __init__(
@@ -1224,7 +1232,10 @@ class Device:
             raise ValueError(
                 f"Device id={id}: cannot pass both parent= and mqtt_cfg=; children share the root's MQTT connection"
             )
-        if parent is not None and parent.root().mqttc is None:
+        # The `_mqtt_cfg` term separates "root never started" (an error) from "root built
+        # transport-free" (mqtt_cfg=None), which must still take children. Drop it and the
+        # transport-free tree can only ever be a single node.
+        if parent is not None and parent.root().mqttc is None and parent.root()._mqtt_cfg is not None:
             raise RuntimeError(
                 f"Device id={id}: parent's tree (root id={parent.root().id()}) has no MQTT client; "
                 "construct and start the root before attaching children"
@@ -1265,7 +1276,10 @@ class Device:
         # Distinguish between initial and subsequent connections to broker
         self.initial_broker_connection = True
         if parent is None:
-            self.connect_broker()
+            # `is not None`, not truthiness: `{}` still connects on defaults, `None` means
+            # no transport. `if mqtt_cfg:` would fold the two together.
+            if mqtt_cfg is not None:
+                self.connect_broker()
         else:
             parent._children.append(self)
         # Child's own INIT → publish description+nodes → READY (Homie add-child steps 1-3).
