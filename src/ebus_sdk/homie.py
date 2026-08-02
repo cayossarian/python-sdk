@@ -62,7 +62,7 @@ from functools import partial
 from typing import Any, Callable, List, Optional, Type, Union
 from ebus_mqtt_client import MqttClient
 
-from ebus_sdk.transport import MqttTransport
+from ebus_sdk.transport import MqttControllerTransport
 
 # Optional: JSONSchema validation of a `json` property's `$format`. Kept optional
 # (see `ebus-sdk[validation]`) so a constrained build can omit it; absent it,
@@ -2218,7 +2218,7 @@ class Controller:
         device_id: Optional[str] = None,
         root_device_id: Optional[str] = None,
         qos: int = EBUS_HOMIE_MQTT_QOS,
-        mqttc: Optional[MqttTransport] = None,
+        mqttc: Optional[MqttControllerTransport] = None,
     ):
         """
         Initialize a Homie Controller
@@ -2263,7 +2263,7 @@ class Controller:
         # Bring-your-own-transport (SDK-61t.6): an injected client is used as-is
         # and its lifecycle stays the caller's; a None here means the SDK
         # constructs, starts, and owns the client (the default, unchanged path).
-        self.mqttc: Optional[MqttTransport] = mqttc
+        self.mqttc: Optional[MqttControllerTransport] = mqttc
         self._owns_client = mqttc is None
         # The SDK-constructed client, kept as its concrete type so start()/stop() —
         # which exist only on a client we own — remain callable. Stays None for an
@@ -2310,7 +2310,7 @@ class Controller:
         client_id = f"homie-controller-{uuid.uuid4()}"
         try:
             # Bound to a local of the concrete type so start() resolves — self.mqttc is
-            # MqttTransport, which deliberately has no start(). Assignment order is
+            # MqttControllerTransport, which deliberately has no start(). Assignment order is
             # unchanged from before: both references are set before start(), so a
             # start() that raises leaves self.mqttc set exactly as it did previously.
             client = MqttClient.from_config(

@@ -1305,31 +1305,54 @@ class TestControllerBYOTransport:
             client.stop.assert_called_once()  # and stops it
 
 
-class TestMqttTransportProtocol:
+class TestMqttTransportProtocols:
     """The injection point is typed by what the SDK calls on an injected client (#8)."""
 
-    def test_mqtt_client_satisfies_the_protocol(self):
+    def test_mqtt_client_satisfies_both_protocols(self):
         """The concrete client must keep satisfying the widened annotation."""
         from ebus_mqtt_client import MqttClient as ConcreteClient
 
-        from ebus_sdk import MqttTransport
+        from ebus_sdk import MqttControllerTransport, MqttTransport
 
         assert issubclass(ConcreteClient, MqttTransport)
+        assert issubclass(ConcreteClient, MqttControllerTransport)
 
-    def test_protocol_is_exported_from_the_package_root(self):
+    def test_protocols_are_exported_from_the_package_root(self):
         """A consumer who cannot name the type gets nothing from the widening."""
         import ebus_sdk
 
         assert "MqttTransport" in ebus_sdk.__all__
+        assert "MqttControllerTransport" in ebus_sdk.__all__
         assert ebus_sdk.MqttTransport is not None
+        assert ebus_sdk.MqttControllerTransport is not None
 
-    def test_a_three_member_client_is_a_valid_transport(self):
-        """publish / subscribe / unsubscribe is the whole injected-client contract.
+    def test_the_controller_contract_derives_from_the_shared_base(self):
+        """The base carries only what both roles share, so a role-specific contract
+        inherits no member its own call sites never reach. A `Device`-side protocol
+        derives from `MqttTransport`, which is why it will not inherit `unsubscribe`.
+        """
+        from ebus_sdk import MqttControllerTransport, MqttTransport
+
+        assert issubclass(MqttControllerTransport, MqttTransport)
+
+        class PublishSubscribeOnly:
+            def publish(self, topic, data, qos=1, retain=False):
+                return None
+
+            def subscribe(self, sub, param, qos=1):
+                return None
+
+        client = PublishSubscribeOnly()
+        assert isinstance(client, MqttTransport)
+        assert not isinstance(client, MqttControllerTransport)
+
+    def test_a_three_member_client_is_a_valid_controller_transport(self):
+        """publish / subscribe / unsubscribe is the whole consumer-side contract.
 
         Deliberately implements nothing else — no start, stop, is_connected, is_running
         or publish_and_flush — because the SDK never calls those on an injected client.
         """
-        from ebus_sdk import MqttTransport
+        from ebus_sdk import MqttControllerTransport
 
         class Minimal:
             def publish(self, topic, data, qos=1, retain=False):
@@ -1342,7 +1365,7 @@ class TestMqttTransportProtocol:
                 return True
 
         client = Minimal()
-        assert isinstance(client, MqttTransport)
+        assert isinstance(client, MqttControllerTransport)
 
         ctrl = Controller(mqttc=client)
         ctrl.start_discovery()
