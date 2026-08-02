@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""simple-controller: discover and walk a TREE of eBus devices.
+
+eBus devices form parent/child trees (an enclosure with circuit / BESS / MID
+children, all under one broker connection). This controller discovers them and
+presents the TREE, not a flat pile:
+
+  * walks roots -> descendants (`get_root_devices()` + `get_children()`);
+  * reports each device's EFFECTIVE state (`get_effective_state()`), so a child
+    of a LOST root reads LOST rather than its own stale `ready`;
+  * prints per-node property values, flags settable properties;
+  * can send one `/set` to a settable property (`set_property()`).
+
+Pairs with the tree device example (`examples/simple-tree-device`): run that
+against a broker, point this at the same broker, and watch the tree appear.
+
+Discovery modes:
+  wildcard (default)   see every device on the broker, grouped into trees
+  --root <device-id>   tree-rooted: subscribe to one root + its descendants
+
+Run:
+  ./simple-controller --config /path/to/broker-cfg.json
+  ./simple-controller --config broker-cfg.json --root panel-1
+  ./simple-controller --config broker-cfg.json --set circuit-3/switch/relay=true
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import time
+
+from ebus_sdk import Controller, DiscoveredDevice
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("simple-controller")
+
+
+# --- discovery callbacks -----------------------------------------------------
+
+
+def on_device_discovered(device: DiscoveredDevice) -> None:
+    kind = "root" if device.is_root else "child"
+    logger.info(f"discovered {kind} {device.device_id} (state={device.state})")
+
+
+def on_device_state_changed(device: DiscoveredDevice, old_state: str, new_state: str) -> None:
+    logger.info(f"{device.device_id}: {old_state} -> {new_state}")
+
+
+def on_property_changed(device_id: str, node_id: str, property_id: str, new_value: str, old_value: str) -> None:
+    logger.info(f"{device_id}/{node_id}/{property_id} = {new_value}")
+
+
+# --- tree rendering ----------------------------------------------------------
+
+
+def _print_device(controller: Controller, device: DiscoveredDevice, depth: int) -> None:
+    pad = "  " * depth
+    effective = controller.get_effective_state(device.device_id)
+    own = device.state
+    # Show the effective state; call out when a non-ready root has suppressed a
+    # descendant's own state (the whole point of a tree-aware view).
+    state = str(effective) if effective == own else f"{effective} (own: {own})"
+    dtype = (device.description or {}).get("type", "?")
+    print(f"{pad}- {device.device_id}  [{dtype}]  state={state}")
+    for node_id in device.get_nodes():
+        for prop_id, descriptor in device.get_node_properties(node_id).items():
+            value = device.get_property(node_id, prop_id)
+            settable = isinstance(descriptor, dict) and descriptor.get("settable", False)
+            tag = " [settable]" if settable else ""
+            print(f"{pad}      {node_id}/{prop_id} = {value}{tag}")
+
+
+def _print_subtree(controller: Controller, device: DiscoveredDevice, depth: int) -> None:
+    _print_device(controller, device, depth)
+    for child in controller.get_children(device.device_id):
+        _print_subtree(controller, child, depth + 1)
+
+
+def print_tree(controller: Controller) -> None:
+    roots = controller.get_root_devices()
+    total = len(controller.get_all_devices())
+    print("-" * 60)
+    print(f"{len(roots)} tree(s), {total} device(s) discovered")
+    print("-" * 60)
+    for root in roots:
+        _print_subtree(controller, root, 0)
+    print()
+
+
+# --- main --------------------------------------------------------------------
+
+
+def load_broker_config(config_file: str) -> dict:
+    with open(config_file, "r") as f:
+        return json.load(f)
+
+
+def _parse_set(spec: str) -> tuple[str, str, str, str]:
+    """Parse `<device>/<node>/<property>=<value>` for --set."""
+    path, sep, value = spec.partition("=")
+    parts = path.split("/")
+    if not sep or len(parts) != 3:
+        print("--set expects <device>/<node>/<property>=<value>")
+        sys.exit(1)
+    return parts[0], parts[1], parts[2], value
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Discover and walk a tree of eBus devices")
+    parser.add_argument("-c", "--config", help="Path to broker config JSON (or set EBUS_BROKER_CFG env var)")
+    parser.add_argument("--root", help="Tree-rooted discovery: subscribe to this root and its descendants")
+    parser.add_argument("--set", dest="set_spec", help="Send one /set: <device>/<node>/<property>=<value>")
+    parser.add_argument("--interval", type=float, default=5.0, help="Seconds between tree summaries (default 5)")
+    args = parser.parse_args()
+
+    config_file = args.config or os.environ.get("EBUS_BROKER_CFG")
+    if not config_file:
+        print("Error: no broker config. Use --config <file> or set EBUS_BROKER_CFG.")
+        sys.exit(1)
+    mqtt_cfg = load_broker_config(config_file)
+    set_target = _parse_set(args.set_spec) if args.set_spec else None
+
+    # Tree-rooted mode subscribes to one root and auto-subscribes descendants as
+    # they announce; wildcard mode (default) discovers every device on the broker.
+    controller = Controller(mqtt_cfg=mqtt_cfg, root_device_id=args.root)
+    controller.set_on_device_discovered_callback(on_device_discovered)
+    controller.set_on_device_state_changed_callback(on_device_state_changed)
+    controller.set_on_property_changed_callback(on_property_changed)
+
+    mode = f"tree-rooted at {args.root}" if args.root else "wildcard"
+    logger.info(f"starting discovery ({mode}); Ctrl-C to exit")
+    controller.start_discovery()
+
+    try:
+        first = True
+        while True:
+            time.sleep(args.interval)
+            print_tree(controller)
+            # Fire the demo /set once, after the first discovery window.
+            if first and set_target is not None:
+                dev, node, prop, value = set_target
+                ok = controller.set_property(dev, node, prop, value)
+                logger.info(f"set {dev}/{node}/{prop}={value} -> {ok}")
+            first = False
+    except KeyboardInterrupt:
+        print()
+        logger.info("shutting down")
+        controller.stop()
+
+
+if __name__ == "__main__":
+    main()

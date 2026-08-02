@@ -47,6 +47,16 @@ curl -X POST http://localhost:8765/doe/import-limit \
 
 Envelope fields: `power-limit` (integer W) and/or `apparent-power-limit` (integer VA) — at least one required; `source` (one of `CONTRACT` / `REGULATOR` / `EQUIPMENT` / `GRID` / `UNKNOWN`, optional); `start-time` / `end-time` (ISO-8601 UTC, optional). POST an empty body or `null` to clear the signal for that direction. The same shape is served at `/doe/export-limit`, and the price schedules at `/price/import-price` and `/price/export-price` (price-window objects: `price` + `currency`, `price-level`, `source`, `start-time` / `end-time`). A body that violates the property's `$format` schema is rejected with `400` and the validation error.
 
+### simple-controller
+
+Discovers eBus devices and walks them as a TREE (roots then descendants), the current parent/child model: it reports each device's EFFECTIVE state (a child of a LOST root reads LOST, not its own stale `ready`), prints per-node property values, flags settable properties, and can send one `/set` to a settable property. Pairs with `simple-tree-device`: run that against a broker, point this at the same broker, and watch the tree appear. Wildcard discovery by default; `--root <device-id>` discovers one root and its descendants.
+
+```bash
+./simple-controller --config /path/to/broker-cfg.json
+./simple-controller --config broker-cfg.json --root panel-1
+./simple-controller --config broker-cfg.json --set circuit-3/switch/relay=true
+```
+
 ### simple-span-controller
 
 SPAN Panel controller with mDNS discovery. Connects via MQTTS and monitors power flow properties.
