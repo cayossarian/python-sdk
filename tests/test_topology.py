@@ -80,8 +80,8 @@ def test_backed_up_loads():
 def test_completeness_signal():
     topo = SiteTopology.assemble(_site())
     c = topo.completeness()
-    # 6 connection points (svc, mid, ft-lugs, circuit-1/2/3/5) — ft-lugs has fed-by
-    # but no downstream fact, circuit-5 only backed-up: both "unknown" downstream.
+    # 7 connection points (svc, mid, ft-lugs, circuit-1/2/3/5): ft-lugs has fed-by
+    # but no downstream fact, circuit-5 only backed-up, both "unknown" downstream.
     assert c["connection_points"] == 7
     assert c["unused"] == 1  # circuit-3
     assert c["unknown"] == 2  # ft-lugs, circuit-5 (no feeds-device-id / feeds-role)
@@ -126,3 +126,30 @@ def test_devices_without_connection_node_are_plain_nodes():
     assert topo.nodes()["panel"].discovered is True
     assert topo.nodes()["panel"].connection is None
     assert topo.children("svc-lugs") == ["panel"]
+
+
+def test_orphan_der_without_connection_record_is_unknown_not_dropped():
+    # A DER discovered on the bus that owns NO connection record AND is referenced
+    # by no other device's connection edge. SPAN connection records are
+    # best-effort, so absence must read as "unknown" (a plain, edge-less node),
+    # never as a topology assertion and never as a silent drop. (SDK-61t.5)
+    devices = [
+        _dev("svc-lugs", "energy.ebus.device.lugs", {"service-rating": 200, "feeds-device-id": "panel"}),
+        _dev("panel", "energy.ebus.device.distribution-enclosure", {"fed-by-device-id": "svc-lugs"}),
+        _dev("bess-orphan", "energy.ebus.device.bess"),  # discovered, no connection node, unreferenced
+    ]
+    topo = SiteTopology.assemble(devices)
+    nodes = topo.nodes()
+    # Present and discovered, with no connection assertion: never dropped.
+    assert "bess-orphan" in nodes
+    assert nodes["bess-orphan"].discovered is True
+    assert nodes["bess-orphan"].connection is None
+    # It was discovered, so it is not an undiscovered/dangling placeholder.
+    assert "bess-orphan" not in topo.undiscovered()
+    # Absence of a record reads as "unknown": no edges, not mistaken for a root
+    # or a backed-up load, and every query is safe (empty, no crash).
+    assert topo.what_feeds("bess-orphan") == []
+    assert topo.children("bess-orphan") == []
+    assert topo.descendants("bess-orphan") == []
+    assert topo.root() == ["svc-lugs"]
+    assert "bess-orphan" not in topo.backed_up_loads()
