@@ -1264,3 +1264,42 @@ class TestTreeRootedReconnect:
         _push_state(ctrl, "bess-1", "ready")
 
         assert set(ctrl.devices.keys()) == {"panel-1", "bess-1"}
+
+
+class TestControllerBYOTransport:
+    """Bring-your-own-transport: inject an MQTT client instead of constructing one (SDK-61t.6)."""
+
+    def test_injected_client_is_used_as_is_and_not_started(self):
+        fake = MagicMock()
+        with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
+            ctrl = Controller(mqtt_cfg={"host": "x"}, mqttc=fake)
+        assert ctrl.mqttc is fake
+        assert ctrl._owns_client is False
+        mock_from_config.assert_not_called()  # SDK does not construct its own
+        fake.start.assert_not_called()  # nor start the caller's client
+
+    def test_injected_client_not_stopped_on_stop(self):
+        fake = MagicMock()
+        ctrl = Controller(mqttc=fake)
+        ctrl.stop()
+        fake.stop.assert_not_called()  # caller owns the client's lifecycle
+        assert ctrl.mqttc is None
+
+    def test_injected_client_drives_discovery(self):
+        fake = MagicMock()
+        ctrl = Controller(mqttc=fake)
+        ctrl.start_discovery()
+        # Wildcard discovery subscribes directly on the injected client.
+        fake.subscribe.assert_called_once()
+
+    def test_owned_client_is_constructed_started_and_stopped(self):
+        with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
+            client = MagicMock()
+            client.sub_callbacks = {}
+            mock_from_config.return_value = client
+            ctrl = Controller(mqtt_cfg={"host": "x"})
+            assert ctrl._owns_client is True
+            assert ctrl.mqttc is client
+            client.start.assert_called_once()  # SDK starts an owned client
+            ctrl.stop()
+            client.stop.assert_called_once()  # and stops it

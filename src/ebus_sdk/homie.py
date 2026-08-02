@@ -2149,6 +2149,7 @@ class Controller:
         device_id: Optional[str] = None,
         root_device_id: Optional[str] = None,
         qos: int = EBUS_HOMIE_MQTT_QOS,
+        mqttc: Optional[MqttClient] = None,
     ):
         """
         Initialize a Homie Controller
@@ -2171,6 +2172,13 @@ class Controller:
             root_device_id: If set, subscribe to this root and auto-subscribe to
                 its descendants as the tree is announced (SDK-o1h)
             qos: MQTT QoS level for all subscribe/publish operations (default: EBUS_HOMIE_MQTT_QOS)
+            mqttc: Optional pre-built MQTT client to use instead of constructing
+                one from mqtt_cfg (bring-your-own-transport, SDK-61t.6). When
+                given, the SDK uses it as-is and does NOT start() or stop() it:
+                the caller owns its lifecycle and event loop (e.g. a Home
+                Assistant consumer driving MQTT on its own loop). Drive discovery
+                with start_discovery() once the client is connected. Default
+                None: the SDK constructs, starts, and owns a client from mqtt_cfg.
         """
         if device_id is not None and root_device_id is not None:
             raise ValueError(
@@ -2183,7 +2191,11 @@ class Controller:
         self.root_device_id = root_device_id
         self._qos = qos
         self._mqtt_cfg = mqtt_cfg
-        self.mqttc = None
+        # Bring-your-own-transport (SDK-61t.6): an injected client is used as-is
+        # and its lifecycle stays the caller's; a None here means the SDK
+        # constructs, starts, and owns the client (the default, unchanged path).
+        self.mqttc = mqttc
+        self._owns_client = mqttc is None
         self.devices = {}  # {device_id: DiscoveredDevice}
         # Tree-rooted mode: {parent_device_id: set_of_subscribed_child_ids}.
         # Authoritative record of what we've subscribed for under each parent,
@@ -2807,10 +2819,16 @@ class Controller:
         return override if override is not None else device.state
 
     def stop(self) -> None:
-        """Stop the controller, release resources, and disconnect from broker"""
+        """Stop the controller, release resources, and disconnect from broker.
+
+        A SDK-owned client is stopped here as before. An injected
+        (bring-your-own-transport) client is NOT stopped: its lifecycle belongs
+        to the caller; the controller only drops its reference.
+        """
         if self.mqttc:
             logger.info(f"reason=stoppingController,deviceCount={len(self.devices)}")
-            self.mqttc.stop()
+            if self._owns_client:
+                self.mqttc.stop()
             self.mqttc = None
         # Release DiscoveredDevice objects and their property dicts
         self.devices.clear()
