@@ -56,6 +56,7 @@ _COMPONENT_ABBR = {
     "o": "origin",
     "cmps": "components",
     "uniq_id": "unique_id",
+    "def_ent_id": "default_entity_id",
     "dev_cla": "device_class",
     "unit_of_meas": "unit_of_measurement",
     "stat_cla": "state_class",
@@ -145,6 +146,7 @@ class HAComponent:
     scalar_value: bool = False  # template reads bare `value` (non-JSON payload)
     availability: Optional[HAAvailability] = None
     removed: bool = False  # platform-only entry == explicit removal
+    default_entity_id: Optional[str] = None  # HA `default_entity_id` (`def_ent_id`); entity-history migration seam
     config: dict = field(default_factory=dict)  # full expanded config (forward-compat)
 
 
@@ -312,6 +314,7 @@ def _parse_component(
         scalar_value=scalar,
         availability=availability,
         removed=removed,
+        default_entity_id=cfg.get("default_entity_id"),
         config=cfg,
     )
 

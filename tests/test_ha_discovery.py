@@ -224,3 +224,20 @@ def test_read_field_nested_and_missing():
     assert read_field(payload, "Nested.Missing") is None
     assert read_field(payload, "absent") is None
     assert read_field(payload, None) is None
+
+
+def test_parses_def_ent_id_abbreviation_into_typed_field():
+    cfg = {
+        "dev": {"ids": "test_meter_000000000001", "name": "Test Meter A"},
+        "o": {"name": "Test Push"},
+        "cmps": {
+            "c_energy": {
+                "p": "sensor",
+                "uniq_id": "test_000000000001_kWh_Tot",
+                "def_ent_id": "sensor.legacy_energy",
+                "stat_t": "testdata/test_meter_000000000001/state",
+            },
+        },
+    }
+    dev = parse_device_config(cfg)
+    assert dev.components["c_energy"].default_entity_id == "sensor.legacy_energy"

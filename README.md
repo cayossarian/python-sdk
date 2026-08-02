@@ -239,7 +239,7 @@ Consumer-side **site-topology assembler** for the `connection` capability. eBus 
 Home Assistant MQTT discovery interop, both directions (see [`doc/ha-mqtt-discovery.md`](doc/ha-mqtt-discovery.md) and [`doc/ha-discovery-bridge.md`](doc/ha-discovery-bridge.md)):
 
 - **Parse (HA -> eBus)** - `parse_device_config` into the neutral `HADevice` / `HAComponent` model; `derive_spec` / `unit_for` map a component's `device_class` / `unit` to an eBus `PropertySpec`
-- **Emit (eBus -> HA)** - `homie_description_to_ha` / `homie_device_to_ha` / `to_config` serialize a Homie device into HA discovery config; `ebus_default_override` adds eBus-capability-aware metadata
+- **Emit (eBus -> HA)** - `homie_description_to_ha` / `homie_device_to_ha` / `to_config` serialize a Homie device into HA discovery config; `ebus_default_override` adds eBus-capability-aware metadata; a typed `default_entity_id` on a component preserves an entity's id (and its recorded history) when the bridge replaces an existing HA integration
 - **HaDiscoveryBridge** - controller-role runtime that discovers eBus devices and publishes/clears their HA discovery topics, with per-device mapping and graceful `stop()` vs permanent `clear_all()`
 - **Loop avoidance** - `is_ebus_sdk_origin` (origin self-echo) and the `energy.ebus.imported` extension + `imported-from` attribute (`is_imported` / `imported_source`) to prevent a HA <-> eBus round-trip echo
 

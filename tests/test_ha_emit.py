@@ -343,3 +343,34 @@ def test_round_trip_through_parser_recovers_shared_fields():
     assert comp.unit_of_measurement == "W"
     assert comp.state_topic == "ebus/5/test-panel/meter/power"
     assert reparsed.name == "Test Panel"
+
+
+def test_default_entity_id_absent_when_unset():
+    # No consumer sets it, so existing emitted payloads stay byte-identical.
+    device = homie_description_to_ha(DESCRIPTION, "test-panel")
+    config = to_config(device)
+    assert "default_entity_id" not in config["components"]["meter_power"]
+
+
+def test_def_ent_id_round_trips_to_long_form_and_emits():
+    # Parse an abbreviated `def_ent_id`, then re-emit: the abbreviation collapses
+    # to the long `default_entity_id` (as every other abbreviated field already
+    # does), and it is emitted because the typed field is now set.
+    raw = {
+        "dev": {"ids": "panel-x", "name": "Panel X"},
+        "o": {"name": "test"},
+        "cmps": {
+            "meter_power": {
+                "p": "sensor",
+                "uniq_id": "panel-x_meter_power",
+                "def_ent_id": "sensor.stable_power",
+                "stat_t": "ebus/5/panel-x/meter/power",
+            },
+        },
+        "avty_t": "ebus/5/panel-x/$state",
+    }
+    parsed = parse_device_config(raw)
+    assert parsed.components["meter_power"].default_entity_id == "sensor.stable_power"
+    cmp = to_config(parsed)["components"]["meter_power"]
+    assert cmp["default_entity_id"] == "sensor.stable_power"
+    assert "def_ent_id" not in cmp  # normalized to the long form, emitted once

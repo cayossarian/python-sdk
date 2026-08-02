@@ -464,6 +464,7 @@ _COMPONENT_FIELDS = (
     ("state_class", "state_class"),
     ("state_topic", "state_topic"),
     ("value_template", "value_template"),
+    ("default_entity_id", "default_entity_id"),
 )
 
 # Structural keys never copied out of a component's free-form `config` overlay
