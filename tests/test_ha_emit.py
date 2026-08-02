@@ -191,6 +191,56 @@ def test_override_receives_context():
     assert seen == {"node_type": "energy.ebus.capability.meter", "settable": False, "unit": "W"}
 
 
+def test_override_receives_property_values():
+    seen = {}
+
+    def capture(comp, ctx):
+        seen["property_values"] = ctx.property_values
+        return comp
+
+    values = {"info": {"space": "12"}, "meter": {"power": 42.0}}
+    homie_property_to_component(
+        "dev1",
+        "meter",
+        "power",
+        {"datatype": "float", "unit": "W"},
+        property_values=values,
+        override=capture,
+    )
+    # The whole-device value map is threaded through, so a hook can read a
+    # sibling property's value (here `info/space`) to derive stable identity.
+    assert seen["property_values"] is values
+    assert seen["property_values"]["info"]["space"] == "12"
+
+
+def test_property_values_defaults_none_for_description_only_caller():
+    seen = {}
+
+    def capture(comp, ctx):
+        seen["property_values"] = ctx.property_values
+        return comp
+
+    homie_property_to_component("dev1", "meter", "power", {"datatype": "float"}, override=capture)
+    assert seen["property_values"] is None
+
+
+def test_property_values_threaded_through_description_walk():
+    def name_from_space(comp, ctx):
+        # Realistic use: derive a stable name from a sibling `info/space` value
+        # rather than the user-editable property name.
+        if ctx.property_values:
+            space = ctx.property_values.get("info", {}).get("space")
+            if space is not None:
+                comp.name = f"Circuit {space}"
+        return comp
+
+    device = homie_description_to_ha(
+        DESCRIPTION, "test-panel", property_values={"info": {"space": "7"}}, override=name_from_space
+    )
+    # Every component saw the same device-wide value map.
+    assert device.components["meter_power"].name == "Circuit 7"
+
+
 # --- whole-device translation -----------------------------------------------
 
 

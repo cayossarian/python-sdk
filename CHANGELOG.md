@@ -4,6 +4,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- HA discovery emit: an override hook now sees the device's live property values. `PropertyContext` (the object `emit` passes to an `OverrideHook`) carries a new read-only `property_values` field, the whole device's `{node_id: {prop_id: value}}` map, threaded through `homie_property_to_component` / `homie_description_to_ha` (and already sourced from `discovered.properties` by `homie_device_to_ha`). A hook can now derive stable entity identity or metadata from a sibling property's value (e.g. a circuit's breaker position in `info/space`) rather than from a user-editable name. Additive and backward compatible: hooks that ignore the field are unaffected, and the field is `None` for a description-only caller. The dict aliases the controller's live cache, so treat it as read-only.
+
 ## [0.12.0] — 2026-07-20
 
 ### Fixed

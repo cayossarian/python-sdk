@@ -162,6 +162,14 @@ class PropertyContext:
     Homie `$type` (e.g. `energy.ebus.capability.meter`), and the raw property
     `$description` dict plus the fields already pulled out of it. The hook may
     read any of this to decide how to adjust (or suppress) the component.
+
+    `property_values` is the whole device's live value map
+    (`{node_id: {prop_id: value}}`), so a hook can derive identity or metadata
+    from a sibling property's value (e.g. a circuit's breaker position in
+    `info/space` rather than its user-editable name). It is `None` for a
+    description-only caller. Treat it as READ-ONLY: it aliases the controller's
+    live property cache (`DiscoveredDevice.properties`), not a copy, so mutating
+    it corrupts running controller state.
     """
 
     device_id: str
@@ -172,6 +180,7 @@ class PropertyContext:
     datatype: Optional[str]
     settable: bool
     unit: Optional[str]
+    property_values: Optional[dict] = None
 
 
 # An override hook: given the generically-inferred component and its context,
@@ -203,6 +212,7 @@ def homie_property_to_component(
     prop: dict,
     *,
     node_type: Optional[str] = None,
+    property_values: Optional[dict] = None,
     override: Optional[OverrideHook] = None,
 ) -> Optional[HAComponent]:
     """Translate one Homie property `$description` into an `HAComponent`.
@@ -211,6 +221,10 @@ def homie_property_to_component(
     settable, format, ...). Generic inference builds the component; if `override`
     is given it is called last with the component and a `PropertyContext`, and
     may return a modified component or `None` to drop the entity.
+
+    `property_values` (the device's `{node_id: {prop_id: value}}` map) is passed
+    through onto the `PropertyContext` so a hook can read a sibling property's
+    value; it is read-only (see `PropertyContext`).
     """
     datatype = prop.get("datatype")
     settable = bool(prop.get("settable", False))
@@ -266,6 +280,7 @@ def homie_property_to_component(
             datatype=datatype,
             settable=settable,
             unit=unit,
+            property_values=property_values,
         )
         component = override(component, ctx)
     return component
@@ -350,6 +365,7 @@ def homie_description_to_ha(
                 prop_id,
                 prop,
                 node_type=node_type,
+                property_values=property_values,
                 override=override,
             )
             if component is not None:
