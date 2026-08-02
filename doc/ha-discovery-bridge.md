@@ -104,6 +104,38 @@ HaDiscoveryBridge(
 
 `ebus_default_override` is a ready-made hook that recognizes the eBus capability vocabulary (`energy.ebus.capability.<capability>` node types plus known property ids) and emits better metadata than unit inference alone: `meter/imported-energy` -> energy + total_increasing, `battery/soc` -> battery (resolving the ambiguous percent), `info/*` -> the `diagnostic` entity category. It only ADDS or SHARPENS; it never suppresses, so it is safe as a blanket `default_override`. Generic Homie devices that do not use the eBus vocabulary fall through to plain inference unchanged.
 
+## Replacing an existing integration: preserving entity_id and history
+
+When the discovery bridge REPLACES an existing Home Assistant integration for the same hardware (for example moving a device off a bespoke integration onto eBus discovery), the entities it creates should inherit the old ones' recorded history, or users lose their long-term statistics on the switch. Two facts of Home Assistant's data model decide whether that happens.
+
+**The entity registry keys on `(domain, platform, unique_id)`.** A `unique_id` reused from the old integration does NOT inherit that integration's entity: it creates a SECOND entity alongside it. So matching `unique_id` is not how history is preserved (and colliding it is actively harmful).
+
+**History and long-term statistics key on `entity_id`, not `unique_id`.** A statistic's id IS the `entity_id`, and recorded states resolve through the `entity_id`. So preserving the `entity_id` across the change of owning integration is exactly what carries the history forward.
+
+Two mechanisms preserve the `entity_id`:
+
+1. **Set `default_entity_id` at creation.** `HAComponent` carries a typed `default_entity_id` field (emitted as HA's `default_entity_id`); set it to the OLD integration's `entity_id` and Home Assistant uses that id when it first creates the entity. This is the clean path for a device that has not been discovered yet. Set it from an override hook (or the customizer table):
+
+```python
+OLD_IDS = {("meter", "active-power"): "sensor.panel_main_power"}  # prior entity_ids
+
+def preserve_ids(component, ctx):
+    old = OLD_IDS.get((ctx.node_id, ctx.prop_id))
+    if old:
+        component.default_entity_id = old
+    return component
+
+HaDiscoveryBridge(controller, default_override=preserve_ids)
+```
+
+   `default_entity_id` applies only when the entity is first created; it has no effect on an entity that already exists.
+
+2. **Rename after the fact.** For entities Home Assistant has ALREADY created, rename each to the old `entity_id`. The recorder follows the rename and updates both the statistics metadata and the states metadata, so history is carried across rather than orphaned. This is the path when you cannot set `default_entity_id` before first discovery.
+
+**Key the mapping on something stable.** Either mechanism needs a map from each eBus property to the old `entity_id`, and that map must survive a user renaming the device in its app. Derive the key from a stable value rather than the user-editable name: an override hook can read any sibling property's value from `ctx.property_values` (the device's `{node_id: {prop_id: value}}` map), so a circuit can be keyed on its breaker position (`info/space`) instead of its display name. See `PropertyContext.property_values`.
+
+Home Assistant's registry and recorder internals evolve between releases; the `(domain, platform, unique_id)` registry key and the `statistic_id == entity_id` invariant above are the stable contract this relies on.
+
 ## Lifecycle and offline handling
 
 - Device discovered, or `$description` changed: publish (retained) `homeassistant/device/<id>/config`.
