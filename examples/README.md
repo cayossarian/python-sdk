@@ -21,14 +21,6 @@ A parent/child device TREE over one MQTT connection: a root `distribution-enclos
 ./simple-tree-device --config /path/to/broker-cfg.json --check   # build + print + exit
 ```
 
-### simple-controller
-
-Controller that auto-discovers Homie devices and monitors property changes.
-
-```bash
-./simple-controller --config /path/to/broker-cfg.json
-```
-
 ### utility-meter
 
 Publishes a single eBus utility-meter device (`energy.ebus.device.utility-meter`, per the Electrification Bus `data-models/utility-meter.md`, v0.3) with the data model's capabilities: the required `info` / `meter` / `status` plus the optional `grid` / `doe` / `price` / `demand` / `power-quality` a meter publishes when it has the signal. The `doe` and `price` capabilities are `json` properties (`doe/import-limit`/`export-limit`, `price/import-price`/`export-price`), each a JSON array of time-windowed objects that advertises its schema as a `$format` JSONSchema; enum properties advertise their allowed values via `$format`. A local HTTP endpoint stands in for the utility's out-of-band backhaul for runtime doe/price updates, validating each posted body against the property's `$format` before publish (install the `validation` extra to enable it: `pip install 'ebus-sdk[validation]'`).
