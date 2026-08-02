@@ -128,3 +128,18 @@ def test_customizer_can_set_default_entity_id(monkeypatch):
         "meter", "active-power", {"datatype": "float", "unit": "W"}, node_type="energy.ebus.capability.meter"
     )
     assert comp.default_entity_id == "sensor.panel_power"
+
+
+def test_customizer_can_set_name_and_unit_typed_fields(monkeypatch):
+    # name and unit_of_measurement are typed fields too; a table entry must land
+    # on the typed field, not be shadowed via config.
+    monkeypatch.setitem(
+        customize._CAPABILITY_META,
+        "meter",
+        {**customize._CAPABILITY_META["meter"], "active-power": {"name": "Main Power", "unit_of_measurement": "kW"}},
+    )
+    comp = _component(
+        "meter", "active-power", {"datatype": "float", "unit": "W"}, node_type="energy.ebus.capability.meter"
+    )
+    assert comp.name == "Main Power"
+    assert comp.unit_of_measurement == "kW"

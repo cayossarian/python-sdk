@@ -374,3 +374,18 @@ def test_def_ent_id_round_trips_to_long_form_and_emits():
     cmp = to_config(parsed)["components"]["meter_power"]
     assert cmp["default_entity_id"] == "sensor.stable_power"
     assert "def_ent_id" not in cmp  # normalized to the long form, emitted once
+
+
+def test_default_entity_id_emitted_via_typed_field():
+    # Set default_entity_id on the TYPED field only (empty config overlay), so it
+    # can be emitted only through _COMPONENT_FIELDS, not the config fallback. This
+    # guards the emit-side C2 change against a silent regression.
+    def set_default_id(component, ctx):
+        if ctx.prop_id == "power":
+            component.default_entity_id = "sensor.stable_power"
+        return component
+
+    device = homie_description_to_ha(DESCRIPTION, "test-panel", override=set_default_id)
+    assert "default_entity_id" not in device.components["meter_power"].config  # typed field, not config
+    cmp = to_config(device)["components"]["meter_power"]
+    assert cmp["default_entity_id"] == "sensor.stable_power"

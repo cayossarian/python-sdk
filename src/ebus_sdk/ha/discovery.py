@@ -146,8 +146,9 @@ class HAComponent:
     scalar_value: bool = False  # template reads bare `value` (non-JSON payload)
     availability: Optional[HAAvailability] = None
     removed: bool = False  # platform-only entry == explicit removal
-    default_entity_id: Optional[str] = None  # HA `default_entity_id` (`def_ent_id`); entity-history migration seam
     config: dict = field(default_factory=dict)  # full expanded config (forward-compat)
+    # default_entity_id appended LAST so every existing field keeps its positional slot.
+    default_entity_id: Optional[str] = None  # HA `default_entity_id` (`def_ent_id`); entity-history migration seam
 
 
 @dataclass
