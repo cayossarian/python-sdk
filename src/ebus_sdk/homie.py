@@ -688,6 +688,14 @@ class Property:
         if not mqttc:
             logger.warning(f"reason=propertyStartMqttClientNoMqttClient,propertyID={self._id}")
             return
+        # Never start a caller-owned client (bring-your-own-transport): mirror the
+        # ownership guard on Device.start_mqtt_client(). Resolve the root via
+        # node -> device -> root; an incomplete chain falls through as owned.
+        node = self.node()
+        device = node.device() if node else None
+        root = device.root() if device else None
+        if root is not None and not root._owns_client:
+            return
         try:
             if not mqttc.is_running:
                 mqttc.start()
@@ -743,7 +751,12 @@ class Property:
         Publishes the property's value to Homie/eBus broker
         """
         mqttc = self.get_mqtt_client()
-        if not mqttc or not mqttc.is_running:
+        # Gate on connectivity, not just the SDK-owned run flag. A bring-your-own-
+        # transport client (mqttc=) is driven on the caller's loop and never has
+        # is_running set by the SDK's start(), yet can still publish once connected.
+        # is_running covers the owned path (True after start()); for an owned client
+        # connected implies running, so this does not change owned behavior.
+        if not mqttc or not (mqttc.is_running or mqttc.is_connected()):
             logger.warning(f"reason=propertyPublishValueNoMqttClient,id={self._id}")
             return False
         node_id = self.get_node_id()
@@ -820,7 +833,9 @@ class Property:
             return True
 
         mqttc = self.get_mqtt_client()
-        if not mqttc or not mqttc.is_running:
+        # See publish_value: gate on connectivity so an injected (caller-driven)
+        # client can retract a retained value even without the SDK's is_running.
+        if not mqttc or not (mqttc.is_running or mqttc.is_connected()):
             logger.warning(f"reason=propertyClearValueNoMqttClient,propertyID={self._id}")
             return False
         node_id = self.get_node_id()
@@ -1248,6 +1263,18 @@ class Device:
     publishes — for tests, schema derivation, and hosts that publish through their own
     client.
 
+    mqttc= injects a client you already own (bring-your-own-transport): the SDK
+    uses it as-is and never starts or stops it, so a host that owns its MQTT
+    connection (e.g. a Home Assistant integration driving MQTT on its own event
+    loop) can publish an eBus tree through it. Root-only, and mutually exclusive
+    with mqtt_cfg=. An injected client bypasses the SDK's connect path, so the
+    caller wires the two pieces that ride it: set will() on the client before
+    connecting, and call refresh_tree() from the client's on-connect handler.
+    stop() publishes a final $state=disconnected through the client but does not
+    flush or close it. on_disconnect= is inert for an injected client (its handler
+    is wired only on an SDK-owned client): register disconnect handling on your own
+    client.
+
         panel = Device(id="panel-1", type="...")
         circuit = Device(id="circuit-1", type="...", parent=panel)
     """
@@ -1262,13 +1289,25 @@ class Device:
         extensions: Optional[List] = None,
         description_extras: Optional[dict] = None,
         mqtt_cfg: Optional[dict] = None,
+        mqttc: Optional[MqttClient] = None,
         qos: int = EBUS_HOMIE_MQTT_QOS,
         on_disconnect: Optional[Callable[[bool], None]] = None,
     ):
-        # Root vs. child invariants — mutually exclusive
-        if parent is not None and mqtt_cfg:
+        # Root vs. child invariants — mutually exclusive. Test presence by identity
+        # (is not None) throughout: mqtt_cfg={} is a real "connect on defaults" value
+        # a child must still be refused, not silently dropped by a truthiness check.
+        if parent is not None and mqtt_cfg is not None:
             raise ValueError(
                 f"Device id={id}: cannot pass both parent= and mqtt_cfg=; children share the root's MQTT connection"
+            )
+        if parent is not None and mqttc is not None:
+            raise ValueError(
+                f"Device id={id}: cannot pass both parent= and mqttc=; children share the root's MQTT connection"
+            )
+        if mqtt_cfg is not None and mqttc is not None:
+            raise ValueError(
+                f"Device id={id}: cannot pass both mqtt_cfg= and mqttc=; pass mqtt_cfg to have the SDK "
+                "build and own a client, or mqttc to inject one whose lifecycle you own"
             )
         # The `_mqtt_cfg` term separates "root never started" (an error) from "root built
         # transport-free" (mqtt_cfg=None), which must still take children. Drop it and the
@@ -1279,8 +1318,14 @@ class Device:
                 "construct and start the root before attaching children"
             )
 
-        # Basic initialization
-        self.mqttc = None
+        # Basic initialization. An injected client (mqttc=) is used as-is and its
+        # lifecycle stays the caller's; _owns_client=False then gates start()/stop()
+        # so the SDK never starts or closes a client it was handed (mirrors
+        # Controller's bring-your-own-transport seam). mqttc=None is the owned path
+        # (the SDK builds the client from mqtt_cfg) or transport-free (mqtt_cfg=None,
+        # no socket). Only the root holds a client; children read root._owns_client.
+        self.mqttc = mqttc
+        self._owns_client = mqttc is None
         self._state = None
         self._qos = qos
         # Optional consumer hook: called on the ROOT's MQTT (dis)connect. Only a
@@ -1288,6 +1333,13 @@ class Device:
         # Contract is transport-neutral: on_disconnect(clean: bool), never a paho
         # reason code (SDK-al5). Must be set before connect_broker() below.
         self._on_disconnect = on_disconnect
+        if mqttc is not None and on_disconnect is not None:
+            # An injected client bypasses connect_broker(), the only place the SDK
+            # registers its disconnect handler, so on_disconnect never fires for a
+            # bring-your-own-transport client (the same limitation Controller
+            # documents). Accept it rather than raise, but warn: the caller must
+            # register disconnect handling on their own client.
+            logger.warning(f"reason=deviceInjectedClientOnDisconnectInert,id={id}")
         self._id = id
         self._name = name if name else id
         self._type = type
@@ -1454,6 +1506,10 @@ class Device:
         if root.mqttc is None:
             logger.warning(f"reason=deviceStartMqttClientNoMqttClient,id={self._id}")
             return
+        if not root._owns_client:
+            # Bring-your-own-transport: the caller owns the client's lifecycle, so
+            # the SDK never starts it (it is expected to be connected already).
+            return
         if not root.mqttc.is_running:
             root.mqttc.start()
 
@@ -1491,6 +1547,13 @@ class Device:
         consumers see a clean shutdown rather than a stale ``ready`` or a
         badly-disconnected ``lost``. After ``stop()`` this device tree should not
         be reused.
+
+        For a bring-your-own-transport root (``mqttc=``) the SDK does not own the
+        client: ``stop()`` publishes the final ``$state=disconnected`` as a plain
+        retained message and returns immediately, without flushing and without
+        closing the client, so it never blocks the caller's loop. The caller
+        stops and disconnects its own client. ``flush_timeout``/``stop_timeout``
+        apply to the owned path only.
         """
         root = self.root()
         mqttc = root.mqttc
@@ -1503,13 +1566,23 @@ class Device:
         if mqttc.is_connected():
             root._state = DeviceState.DISCONNECTED
             state_topic = f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{root._id}/$state"
-            flushed = mqttc.publish_and_flush(
-                state_topic, DeviceState.DISCONNECTED.value, qos=root._qos, retain=True, timeout=flush_timeout
-            )
-            logger.info(f"reason=deviceStopDisconnectedPublished,id={root._id},flushed={flushed}")
+            if root._owns_client:
+                flushed = mqttc.publish_and_flush(
+                    state_topic, DeviceState.DISCONNECTED.value, qos=root._qos, retain=True, timeout=flush_timeout
+                )
+                logger.info(f"reason=deviceStopDisconnectedPublished,id={root._id},flushed={flushed}")
+            else:
+                # Bring-your-own-transport: the caller owns the loop and teardown.
+                # Publish the final state as a plain retained message (the caller's
+                # loop delivers it) and return without flushing or closing — both
+                # publish_and_flush and stop() are owned-only, off the injected
+                # transport surface, so this never blocks the caller's thread.
+                mqttc.publish(state_topic, DeviceState.DISCONNECTED.value, retain=True, qos=root._qos)
+                logger.info(f"reason=deviceStopDisconnectedPublishedInjected,id={root._id}")
         else:
             logger.info(f"reason=deviceStopBrokerUnreachable,id={root._id}")
-        mqttc.stop(timeout=stop_timeout)
+        if root._owns_client:
+            mqttc.stop(timeout=stop_timeout)
         root.mqttc = None
 
     def description(self) -> dict:
@@ -1821,6 +1894,11 @@ class Device:
         Republish this device and every descendant (description, nodes,
         property values, state). Used on broker reconnect (S6) so the entire
         tree's retained-state is re-established under the root's connection.
+
+        For a client the SDK owns, ``on_connect`` calls this automatically on
+        every (re)connect. A bring-your-own-transport caller must call it from
+        their own on-connect handler, so the retained tree re-announces after a
+        broker reconnect the SDK's ``on_connect`` never sees.
         """
         logger.info(
             f"reason=deviceRefreshTree,deviceId={self._id},"
@@ -1988,6 +2066,23 @@ class Device:
         logger.info(f"reason=deviceDisconnect,rootId={self._id},transportRc={rc}")
         _dispatch_disconnect(self._on_disconnect, rc, f"device:{self._id}")
 
+    def will(self) -> dict:
+        """The Last Will and Testament for this device tree: the root's ``$state=lost``.
+
+        The SDK installs this on any client it constructs (see ``connect_broker``).
+        It is exposed because a bring-your-own-transport caller (a root ``Device``
+        handed a live client) must set the will on that client BEFORE connecting:
+        the will rides the MQTT CONNECT packet, so the SDK cannot add it to a
+        client it is merely given after that client has connected. Children share
+        the root's connection, so this always describes the root regardless of
+        which device in the tree it is called on.
+        """
+        root = self.root()
+        return {
+            "topic": f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{root._id}/$state",
+            "payload": DeviceState.LOST.value,
+        }
+
     def connect_broker(self) -> None:
         """
         Connect to MQTT broker using configuration from mqtt_cfg.
@@ -2015,15 +2110,11 @@ class Device:
         if self.mqttc:
             # If we already have a mqtt client, don't reconnect...
             return
-        lwt = {
-            "topic": f"{EBUS_HOMIE_DOMAIN}/{EBUS_HOMIE_VERSION_MAJOR}/{self._id}/$state",
-            "payload": DeviceState.LOST.value,
-        }
         try:
             self.mqttc = MqttClient.from_config(
                 mqtt_cfg=self._mqtt_cfg,
                 client_id=self._id,
-                lwt=lwt,
+                lwt=self.will(),
                 on_connect_callback=partial(self.on_connect),
                 on_disconnect_callback=self._handle_disconnect,
             )
@@ -2342,16 +2433,33 @@ class Controller:
         return self._qos
 
     def _on_connect(self) -> None:
-        """Called when controller connects to MQTT broker.
+        """Called when the controller's owned MQTT client (re-)connects.
 
         MqttClient re-subscribes its own sub_callbacks dict on reconnect, so
-        topic-level recovery is already handled. In tree-rooted mode, the
-        controller's own bookkeeping (devices dict, current children) is reset
-        here so the retained $state/$description that paho delivers on the
-        fresh subscriptions drives a clean re-walk of the tree from the root,
-        identical to first-connect.
+        topic-level recovery is already handled; the discovery-state reset for
+        tree-rooted mode lives in the public ``resync()``, which a
+        bring-your-own-transport caller wires onto its own client.
         """
         logger.info("reason=controllerOnConnect")
+        self.resync()
+
+    def resync(self) -> None:
+        """Reset discovery bookkeeping so retained state re-walks the tree from scratch.
+
+        In tree-rooted mode this wipes the in-memory device registry and the
+        subscribed-children map and re-seeds the root, so the retained
+        ``$state``/``$description`` the broker replays after a (re)connect
+        drives a clean re-walk from the root (the state edge that gates
+        descendant discovery is seen rather than short-circuited by stale
+        state). A no-op in wildcard and single-device modes, where MqttClient's
+        own sub_callbacks recovery is sufficient.
+
+        The SDK calls this on every (re)connect for a client it owns. A
+        bring-your-own-transport caller (``Controller(mqttc=...)``) in
+        tree-rooted mode must call it from their own on-connect handler, since
+        the SDK's ``on_connect`` is registered only on a client it constructs
+        (via ``MqttClient.from_config``), which an injected client bypasses.
+        """
         if self.is_tree_rooted:
             # Cold restart of tree-rooted bookkeeping. paho-mqtt's MqttClient
             # has already re-subscribed our root's four filters; retained
