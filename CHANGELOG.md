@@ -10,6 +10,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 - HA discovery emit: `default_entity_id` is now a first-class `HAComponent` field. HA's per-component `default_entity_id` (abbreviated `def_ent_id`) is the field that lets a consumer replacing an existing integration preserve `entity_id`, and therefore recorded history and long-term statistics, across the change of owning integration. It is now typed on `HAComponent` and emitted only when set, the parser maps the abbreviated `def_ent_id` onto it, and a parse -> emit round-trip normalizes it to the long form like every other abbreviated key. Previously it only survived by riding the free-form `config` overlay. Additive: emitted payloads for consumers that do not set it are unchanged.
 - `Controller` bring-your-own-transport: `Controller(..., mqttc=<client>)` accepts a pre-built MQTT client instead of constructing one from `mqtt_cfg`, so a consumer that drives MQTT on its own event loop (e.g. a Home Assistant integration, which forbids background threads) can use the controller's discovery and `topology.py` over its own transport. An injected client is used as-is: the SDK does not `start()` or `stop()` it (the caller owns its lifecycle and loop), and discovery is driven via `start_discovery()`. Additive: the default (no `mqttc`) path constructs, starts, owns, and stops a client exactly as before.
 
+### Fixed
+
+- HA discovery customizer: an `ebus_default_override` (or composed) capability-table entry can now set `value_template` (and the other typed `HAComponent` fields `name` / `unit_of_measurement` / `default_entity_id`). Previously such a key was routed to the free-form `config` overlay and then silently dropped on serialization, because those fields are typed and pre-populated on the component (`value_template` is pre-set to `{{ value }}`); they are now routed to the typed field so they take effect. No change for the built-in table, which sets only `device_class` / `state_class` / `entity_category`.
+
 ## [0.12.0] — 2026-07-20
 
 ### Fixed

@@ -6,7 +6,9 @@ from ebus_sdk.ha import (
     ebus_default_override,
     homie_description_to_ha,
     homie_property_to_component,
+    to_config,
 )
+from ebus_sdk.ha import customize
 
 
 def _component(node_id, prop_id, prop, node_type=None):
@@ -85,3 +87,44 @@ def test_usable_as_default_override_over_whole_device():
     device = homie_description_to_ha(description, "panel-1", override=ebus_default_override)
     assert device.components["meter_imported-energy"].state_class == "total_increasing"
     assert device.components["battery_soc"].device_class == "battery"
+
+
+# --- typed-field routing (SDK-anu) ------------------------------------------
+
+
+def test_customizer_value_template_lands_on_typed_field_and_emits(monkeypatch):
+    # A table entry for a typed field (value_template) must land on the typed
+    # HAComponent field, not be silently dropped into config where the pre-set
+    # "{{ value }}" default shadows it on serialization.
+    monkeypatch.setitem(
+        customize._CAPABILITY_META,
+        "meter",
+        {**customize._CAPABILITY_META["meter"], "active-power": {"value_template": "{{ value | float * -1 }}"}},
+    )
+    description = {
+        "name": "Panel",
+        "nodes": {
+            "meter": {
+                "type": "energy.ebus.capability.meter",
+                "properties": {"active-power": {"datatype": "float", "unit": "W"}},
+            },
+        },
+    }
+    device = homie_description_to_ha(description, "panel-1", override=ebus_default_override)
+    comp = device.components["meter_active-power"]
+    assert comp.value_template == "{{ value | float * -1 }}"  # routed to the typed field
+    cfg = to_config(device)["components"]["meter_active-power"]
+    assert cfg["value_template"] == "{{ value | float * -1 }}"  # and emitted, not shadowed
+
+
+def test_customizer_can_set_default_entity_id(monkeypatch):
+    # default_entity_id is likewise a typed field; a table must be able to set it.
+    monkeypatch.setitem(
+        customize._CAPABILITY_META,
+        "meter",
+        {**customize._CAPABILITY_META["meter"], "active-power": {"default_entity_id": "sensor.panel_power"}},
+    )
+    comp = _component(
+        "meter", "active-power", {"datatype": "float", "unit": "W"}, node_type="energy.ebus.capability.meter"
+    )
+    assert comp.default_entity_id == "sensor.panel_power"

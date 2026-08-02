@@ -23,9 +23,10 @@ from .discovery import HAComponent
 from .emit import PropertyContext
 
 # (capability, property_id) -> HA metadata that domain knowledge nails better
-# than unit inference. `device_class` / `state_class` override the inferred
-# values; `entity_category` / `icon` land in the component config overlay. A
-# capability's "*" entry applies to every property on that capability.
+# than unit inference. Keys naming a typed HAComponent field (see `_TYPED_KEYS`,
+# e.g. `device_class` / `state_class` / `value_template`) override the inferred
+# value; other keys (`entity_category` / `icon`) land in the component config
+# overlay. A capability's "*" entry applies to every property on that capability.
 _CAPABILITY_META = {
     "meter": {
         "imported-energy": {"device_class": "energy", "state_class": "total_increasing"},
@@ -53,8 +54,21 @@ _CAPABILITY_META = {
     },
 }
 
-# Metadata keys that map to typed HAComponent fields; the rest go to config.
-_TYPED_KEYS = {"device_class", "state_class"}
+# Metadata keys that map to typed HAComponent fields (set via attribute); every
+# other key (entity_category, icon, options, ...) goes to the config overlay.
+# This MUST list every typed HAComponent field a table may set: a typed field is
+# pre-populated on the component and emitted from `emit._COMPONENT_FIELDS`, so
+# routing it through `config.setdefault` would be silently dropped (SDK-anu).
+# `value_template` in particular is pre-set to "{{ value }}", so a table
+# `value_template` only takes effect when routed to the typed field.
+_TYPED_KEYS = {
+    "device_class",
+    "state_class",
+    "value_template",
+    "unit_of_measurement",
+    "name",
+    "default_entity_id",
+}
 
 
 def _capability_of(ctx: PropertyContext) -> Optional[str]:
