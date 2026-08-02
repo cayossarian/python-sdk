@@ -62,6 +62,8 @@ from functools import partial
 from typing import Any, Callable, List, Optional, Type, Union
 from ebus_mqtt_client import MqttClient
 
+from ebus_sdk.transport import MqttControllerTransport
+
 # Optional: JSONSchema validation of a `json` property's `$format`. Kept optional
 # (see `ebus-sdk[validation]`) so a constrained build can omit it; absent it,
 # validation is gracefully skipped (see `validate_json_format`).
@@ -2307,7 +2309,7 @@ class Controller:
         device_id: Optional[str] = None,
         root_device_id: Optional[str] = None,
         qos: int = EBUS_HOMIE_MQTT_QOS,
-        mqttc: Optional[MqttClient] = None,
+        mqttc: Optional[MqttControllerTransport] = None,
     ):
         """
         Initialize a Homie Controller
@@ -2352,8 +2354,13 @@ class Controller:
         # Bring-your-own-transport (SDK-61t.6): an injected client is used as-is
         # and its lifecycle stays the caller's; a None here means the SDK
         # constructs, starts, and owns the client (the default, unchanged path).
-        self.mqttc = mqttc
+        self.mqttc: Optional[MqttControllerTransport] = mqttc
         self._owns_client = mqttc is None
+        # The SDK-constructed client, kept as its concrete type so start()/stop() —
+        # which exist only on a client we own — remain callable. Stays None for an
+        # injected client, which is what makes "never started, never stopped" a
+        # property of the types rather than a promise in a comment.
+        self._owned_client: Optional[MqttClient] = None
         self.devices = {}  # {device_id: DiscoveredDevice}
         # Tree-rooted mode: {parent_device_id: set_of_subscribed_child_ids}.
         # Authoritative record of what we've subscribed for under each parent,
@@ -2393,13 +2400,19 @@ class Controller:
 
         client_id = f"homie-controller-{uuid.uuid4()}"
         try:
-            self.mqttc = MqttClient.from_config(
+            # Bound to a local of the concrete type so start() resolves — self.mqttc is
+            # MqttControllerTransport, which deliberately has no start(). Assignment order is
+            # unchanged from before: both references are set before start(), so a
+            # start() that raises leaves self.mqttc set exactly as it did previously.
+            client = MqttClient.from_config(
                 mqtt_cfg=self._mqtt_cfg,
                 client_id=client_id,
                 on_connect_callback=partial(self._on_connect),
                 on_disconnect_callback=self._handle_disconnect,
             )
-            self.mqttc.start(blocking=False)
+            self._owned_client = client
+            self.mqttc = client
+            client.start(blocking=False)
             logger.info(f"reason=controllerConnected,clientID={client_id}")
         except Exception as e:
             logger.exception(f"reason=controllerConnectException,error={e}")
@@ -3018,9 +3031,13 @@ class Controller:
         """
         if self.mqttc:
             logger.info(f"reason=stoppingController,deviceCount={len(self.devices)}")
-            if self._owns_client:
-                self.mqttc.stop()
+            # Stops via the owned handle, never via self.mqttc: an injected client has no
+            # stop() in its contract, and _owned_client is None precisely when one was
+            # injected. Same condition as before — _owns_client still decides.
+            if self._owns_client and self._owned_client is not None:
+                self._owned_client.stop()
             self.mqttc = None
+            self._owned_client = None
         # Release DiscoveredDevice objects and their property dicts
         self.devices.clear()
         self._subscribed_children.clear()

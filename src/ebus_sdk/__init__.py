@@ -78,6 +78,9 @@ from .topology import (
 # MQTT client
 from ebus_mqtt_client import MqttClient
 
+# Structural types for a caller-supplied MQTT client
+from ebus_sdk.transport import MqttControllerTransport, MqttTransport
+
 __version__ = "0.15.0"
 
 __all__ = [
@@ -130,4 +133,6 @@ __all__ = [
     "CONNECTION_NODE_TYPE",
     # MQTT
     "MqttClient",
+    "MqttTransport",
+    "MqttControllerTransport",
 ]
