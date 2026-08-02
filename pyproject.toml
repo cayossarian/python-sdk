@@ -30,11 +30,13 @@ classifiers = [
 dependencies = [
     # MQTT transport lives in ebus-mqtt-client, which pins paho-mqtt; the SDK
     # does not import paho directly, so paho is a transitive dependency (not
-    # declared here). Floor 0.1.8: the SDK's resilient-connect completeness
-    # (full tree republish on the first connect) depends on the client's
-    # connect_async construction, which construction-decouples from broker
-    # availability. Older clients raised ConnectionRefusedError on a down broker.
-    "ebus-mqtt-client>=0.1.8",
+    # declared here). Floor 0.2.0: the SDK adopts the client's
+    # on_disconnect_callback for push disconnect notification (SDK-al5), added in
+    # 0.2.0. It also relies (since 0.1.8) on the client's connect_async
+    # construction for resilient-connect completeness (full tree republish on the
+    # first connect, construction-decoupled from broker availability); older
+    # clients raised ConnectionRefusedError on a down broker.
+    "ebus-mqtt-client>=0.2.0",
 ]
 
 [project.optional-dependencies]

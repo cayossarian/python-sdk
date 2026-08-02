@@ -4,6 +4,13 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-02
+
+### Added
+
+- `SiteTopology.to_dot()` and `SiteTopology.to_mermaid()`: serialize the assembled site graph to Graphviz DOT and Mermaid source. Both are pure, dependency-free text builders (they emit source; rendering to an image is the consumer's job, via `dot -Tsvg` or a Mermaid viewer), so they add no dependency and stay safe in a constrained build (e.g. the panel's Yocto image, where `topology.py` is consumer-side and typically not even imported). Conventions: a solid edge is a confirmed wiring edge and a dashed edge is one-sided; the service-entrance root, backed-up (island-side) nodes, and undiscovered (dangling-reference) placeholders are visually distinguished. This gives any consumer a one-line topology visualization; the `ebus-topology` CLI in the `electrification-bus/tools` repo is a thin wrapper over these. Additive.
+- `Device(on_disconnect=...)` and `Controller.set_on_disconnect_callback(...)`: an optional consumer hook for push-based disconnect notification (mirror link state into a health readout, log, invalidate cached state) instead of polling `is_connected()`. The callback contract is transport-neutral: it receives a single `clean: bool` (True for an orderly/expected disconnect, False for an unexpected drop). The transport (paho) integer reason code is normalized to that boolean at the SDK boundary and never surfaced, so no paho type or value semantics leak into a consumer (paho stays a hidden transitive dependency behind ebus-mqtt-client). Best-effort: a consumer exception is logged, never propagated to the network loop. Fires on the client owner only (a device root; a controller that owns its client). Adopts ebus-mqtt-client 0.2.0's `on_disconnect_callback`, so the floor rises to `ebus-mqtt-client>=0.2.0` (0.14.0 was already verified compatible). Additive. (SDK-al5)
+
 ## [0.14.0] — 2026-08-02
 
 ### Added

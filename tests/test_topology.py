@@ -153,3 +153,61 @@ def test_orphan_der_without_connection_record_is_unknown_not_dropped():
     assert topo.descendants("bess-orphan") == []
     assert topo.root() == ["svc-lugs"]
     assert "bess-orphan" not in topo.backed_up_loads()
+
+
+# -- serialization (to_dot / to_mermaid) -------------------------------------
+
+
+def test_to_dot_renders_structure():
+    dot = SiteTopology.assemble(_site()).to_dot()
+    assert dot.startswith("digraph ")
+    # Every node appears, quoted (ids contain hyphens, illegal as bare DOT ids).
+    for nid in SiteTopology.assemble(_site()).nodes():
+        assert f'"{nid}"' in dot
+    # Confirmed edge is solid (no attr); one-sided edge is dashed.
+    assert '"svc-lugs" -> "mid-1";' in dot
+    assert '"mid-1" -> "panel" [style=dashed];' in dot
+    # Root bold, backed-up filled, undiscovered dashed/grey.
+    assert "penwidth=2" in dot  # svc-lugs is the service-entrance root
+    assert 'fillcolor="#cfe8ff"' in dot  # circuit-1 is backed-up
+    assert "gray55" in dot  # panel/bess are undiscovered placeholders
+    # Node labels carry id + short type + connection class.
+    assert 'label="svc-lugs\\nlugs\\n[main-lugs]"' in dot
+
+
+def test_to_mermaid_renders_structure():
+    mmd = SiteTopology.assemble(_site()).to_mermaid()
+    assert mmd.startswith("graph TD")
+    assert " --> " in mmd  # confirmed edge
+    assert " -.-> " in mmd  # one-sided edge
+    assert "classDef root" in mmd
+    assert "classDef backedup" in mmd
+    assert "classDef undiscovered" in mmd
+    # Real device ids live in labels (aliased node ids keep Mermaid happy).
+    assert 'n0["' in mmd or 'n1["' in mmd
+    assert "svc-lugs<br/>lugs<br/>[main-lugs]" in mmd
+
+
+def test_to_dot_is_valid_graphviz_when_dot_available():
+    """The emitted DOT actually parses in Graphviz (skipped where dot is absent,
+    e.g. CI); proves we emit valid source without depending on graphviz."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if not shutil.which("dot"):
+        pytest.skip("graphviz 'dot' not installed")
+    dot = SiteTopology.assemble(_site()).to_dot()
+    proc = subprocess.run(["dot", "-Tsvg", "-o", "/dev/null"], input=dot, text=True, capture_output=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_serializers_handle_quotes_and_are_balanced():
+    # A device id with a double-quote must not break the DOT/Mermaid output.
+    devices = [_dev('weird"id', "energy.ebus.device.circuit", {"feeds-role": "UNUSED"})]
+    topo = SiteTopology.assemble(devices)
+    dot = topo.to_dot()
+    assert dot.count("{") == dot.count("}")
+    assert '\\"' in dot  # the quote is escaped for DOT
+    assert "#quot;" in topo.to_mermaid()  # and for Mermaid

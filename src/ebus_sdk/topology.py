@@ -151,6 +151,42 @@ def _read_record(device) -> Optional[ConnectionRecord]:
     )
 
 
+# -- serialization helpers ---------------------------------------------------
+# DOT and Mermaid output is pure text (no graphviz/mermaid dependency): these
+# emit source, they do not render it. Rendering to an image is the consumer's
+# job (`dot -Tsvg`, a Mermaid viewer) and never happens here, so the serializers
+# stay safe to ship even in a constrained (e.g. Yocto) build.
+
+
+def _short_type(device_type: Optional[str]) -> Optional[str]:
+    """The last dotted segment of a device type (``...device.mid`` -> ``mid``)."""
+    if not device_type:
+        return None
+    return device_type.rsplit(".", 1)[-1]
+
+
+def _node_label_parts(node: "TopologyNode") -> List[str]:
+    """Human label lines for a node: id, short type, ``[connection-class]``."""
+    parts = [node.device_id]
+    short = _short_type(node.device_type)
+    if short:
+        parts.append(short)
+    conn_class = node.connection.connection_class if node.connection else None
+    if conn_class:
+        parts.append(f"[{conn_class}]")
+    return parts
+
+
+def _dot_escape(text: str) -> str:
+    """Escape a string for a Graphviz double-quoted id/label."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _mermaid_escape(text: str) -> str:
+    """Escape a string for a Mermaid double-quoted label."""
+    return text.replace('"', "#quot;")
+
+
 class SiteTopology:
     """The assembled site graph: nodes (devices) + directed upstream->downstream edges.
 
@@ -321,3 +357,90 @@ class SiteTopology:
             "unknown": len(points) - surveyed,
             "unused": unused,
         }
+
+    # -- serialization -------------------------------------------------------
+
+    def to_dot(self, name: str = "site") -> str:
+        """Serialize the graph as Graphviz DOT source (pure text, no dependency).
+
+        This EMITS DOT, it does not render it: turning DOT into an image needs
+        Graphviz (``dot -Tsvg``) on the consumer side, never here. Conventions:
+        a solid edge is ``confirmed`` (both sides agree), a dashed edge is
+        one-sided; a bold node is the service-entrance root; a filled node is on
+        the backed-up (island) side; a dashed node is referenced but never
+        discovered (a dangling placeholder).
+        """
+        roots = set(self.root())
+        backed_up = set(self.backed_up_loads())
+        out = [
+            f'digraph "{_dot_escape(name)}" {{',
+            "  rankdir=TB;",
+            '  node [shape=box, fontname="sans-serif"];',
+            '  edge [fontname="sans-serif"];',
+        ]
+        for device_id in sorted(self._nodes):
+            node = self._nodes[device_id]
+            label = "\\n".join(_dot_escape(p) for p in _node_label_parts(node))
+            attrs = [f'label="{label}"']
+            styles: List[str] = []
+            if device_id in backed_up:
+                styles.append("filled")
+                attrs.append('fillcolor="#cfe8ff"')
+            if not node.discovered:
+                styles.append("dashed")
+                attrs.append('color="gray55"')
+                attrs.append('fontcolor="gray40"')
+            if device_id in roots:
+                styles.append("bold")
+                attrs.append("penwidth=2")
+            if styles:
+                attrs.append(f'style="{",".join(dict.fromkeys(styles))}"')
+            out.append(f'  "{_dot_escape(device_id)}" [{", ".join(attrs)}];')
+        for edge in sorted(self._edges.values(), key=lambda e: (e.upstream_id, e.downstream_id)):
+            attr = "" if edge.confirmed else " [style=dashed]"
+            out.append(f'  "{_dot_escape(edge.upstream_id)}" -> "{_dot_escape(edge.downstream_id)}"{attr};')
+        out.append(
+            '  label="solid=confirmed, dashed=one-sided edge; '
+            'bold=service entrance; filled=backed-up; dashed node=undiscovered";'
+        )
+        out.append('  labelloc="b"; fontsize=10; fontname="sans-serif";')
+        out.append("}")
+        return "\n".join(out) + "\n"
+
+    def to_mermaid(self, direction: str = "TD") -> str:
+        """Serialize the graph as Mermaid ``graph`` source (pure text, no dependency).
+
+        Same conventions as :meth:`to_dot`, expressed with Mermaid classes and
+        arrows: ``-->`` is a confirmed edge, ``-.->`` is one-sided; classes mark
+        the service-entrance root, backed-up nodes, and undiscovered
+        placeholders. Paste the output into any Mermaid renderer. Node ids are
+        aliased (``n0``, ``n1`` ...) so real device ids (which may contain
+        characters Mermaid rejects as ids) live only in the labels.
+        """
+        roots = set(self.root())
+        backed_up = set(self.backed_up_loads())
+        ordered = sorted(self._nodes)
+        alias = {device_id: f"n{i}" for i, device_id in enumerate(ordered)}
+        out = [
+            f"graph {direction}",
+            "  %% --> confirmed edge, -.-> one-sided; classes: root / backedup / undiscovered",
+        ]
+        for device_id in ordered:
+            node = self._nodes[device_id]
+            label = "<br/>".join(_mermaid_escape(p) for p in _node_label_parts(node))
+            out.append(f'  {alias[device_id]}["{label}"]')
+        for edge in sorted(self._edges.values(), key=lambda e: (e.upstream_id, e.downstream_id)):
+            arrow = "-->" if edge.confirmed else "-.->"
+            out.append(f"  {alias[edge.upstream_id]} {arrow} {alias[edge.downstream_id]}")
+        out.append("  classDef root stroke-width:3px,font-weight:bold;")
+        out.append("  classDef backedup fill:#cfe8ff;")
+        out.append("  classDef undiscovered stroke-dasharray:5 4,stroke:#8c8c8c,color:#6b6b6b;")
+        for device_id in ordered:
+            node = self._nodes[device_id]
+            if device_id in roots:
+                out.append(f"  class {alias[device_id]} root;")
+            if device_id in backed_up:
+                out.append(f"  class {alias[device_id]} backedup;")
+            if not node.discovered:
+                out.append(f"  class {alias[device_id]} undiscovered;")
+        return "\n".join(out) + "\n"

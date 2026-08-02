@@ -1,7 +1,10 @@
 # ebus-sdk
 
 [![PyPI](https://img.shields.io/pypi/v/ebus-sdk)](https://pypi.org/project/ebus-sdk/)
+[![CI](https://github.com/electrification-bus/python-sdk/actions/workflows/lint.yml/badge.svg)](https://github.com/electrification-bus/python-sdk/actions/workflows/lint.yml)
+[![Python versions](https://img.shields.io/pypi/pyversions/ebus-sdk.svg)](https://pypi.org/project/ebus-sdk/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Python SDK for the [Electrification Bus (eBus)](https://ebus.energy) integration framework, which adopts and supports the [Homie Convention](https://homieiot.github.io).
 
@@ -195,10 +198,10 @@ MQTT transport lives in the separate [`ebus-mqtt-client`](https://github.com/ele
 
 Core Homie convention implementation:
 
-- **Device** - Represents a Homie device; pass `parent=` to build a child in a tree
+- **Device** - Represents a Homie device; pass `parent=` to build a child in a tree, or `on_disconnect=` for a push disconnect hook (`clean: bool`)
 - **Node** - Groups related properties within a device
 - **Property** - Individual data points (sensors, controls)
-- **Controller** - Discovers and monitors Homie devices on a broker; navigates trees and computes effective state
+- **Controller** - Discovers and monitors Homie devices on a broker; navigates trees and computes effective state; `set_on_disconnect_callback` for push disconnect notification
 - **DiscoveredDevice** - Represents a device found by the controller; exposes `root_id`, `parent_id`, `children_ids`, `is_root`
 - **DeviceState** - Enum: `init`, `ready`, `disconnected`, `sleeping`, `lost`
 - **HOMIE_EFFECTIVE_STATE_TABLE** - Homie 5 state-precedence table used by `Controller.get_effective_state()`
@@ -236,6 +239,7 @@ Consumer-side **site-topology assembler** for the `connection` capability. eBus 
 - **`root()`**, **`parents`** / **`children`** / **`what_feeds`**, **`ancestors`** / **`descendants`** (cycle-safe) - traverse the assembled graph
 - **`connection_points_feeding(id)`** + **`aggregate(id, value_fn)`** - the multi-source case (e.g. a multi-unit BESS on several circuits); sum a caller-supplied metric across them
 - **`backed_up_loads()`**, **`completeness()`** - which paths survive an outage; surveyed-vs-unknown coverage
+- **`to_dot()`** / **`to_mermaid()`** - render the graph to Graphviz DOT / Mermaid source (pure text, no dependency; you render it, e.g. `dot -Tsvg`), with confirmed vs one-sided edges, the service-entrance root, and backed-up / undiscovered nodes visually distinguished
 - Robust to partial data: dangling references become `undiscovered()` placeholders, cycles terminate, and the graph is explicitly a view (never a source of truth)
 
 ### ha/
@@ -254,7 +258,7 @@ See [`examples/README.md`](examples/README.md) for example scripts demonstrating
 ## Requirements
 
 - Python 3.10+
-- [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client) >= 0.1.8 (the MQTT transport layer; it pins `paho-mqtt`, so the SDK does not depend on paho directly. 0.1.8 adds the asynchronous, down-broker-tolerant connect the resilient-connect behavior relies on)
+- [`ebus-mqtt-client`](https://github.com/electrification-bus/ebus-mqtt-client) >= 0.2.0 (the MQTT transport layer; it pins `paho-mqtt`, so the SDK does not depend on paho directly. 0.2.0 adds the `on_disconnect_callback` the SDK's disconnect hook adopts; it also carries, since 0.1.8, the asynchronous, down-broker-tolerant connect the resilient-connect behavior relies on)
 
 Optional extras:
 

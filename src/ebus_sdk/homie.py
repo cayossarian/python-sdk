@@ -1187,6 +1187,28 @@ class StateTransitionContext:
         return False
 
 
+def _dispatch_disconnect(callback: Optional[Callable[[bool], None]], rc, source: str) -> None:
+    """Best-effort invoke a consumer ``on_disconnect(clean: bool)`` callback.
+
+    The transport (paho) reason code ``rc`` is normalized HERE to an SDK-owned
+    boolean and never surfaced, so a paho type or its value semantics do not
+    leak into an eBus consumer (paho is a hidden transitive dependency behind
+    ebus-mqtt-client). ``rc == 0`` (paho ``MQTT_ERR_SUCCESS``) is a clean,
+    orderly disconnect; anything else is an unexpected drop. ``getattr(rc,
+    "value", rc)`` also accepts a paho v5 ``ReasonCode`` (via its ``.value``)
+    should the transport ever forward one, without changing this contract. A
+    consumer exception is logged and swallowed so it can never disrupt the MQTT
+    network loop (the client also guards on its side).
+    """
+    if callback is None:
+        return
+    clean = getattr(rc, "value", rc) == 0
+    try:
+        callback(clean)
+    except Exception:
+        logger.exception(f"reason=onDisconnectCallbackException,source={source}")
+
+
 class Device:
     """
     Object representing a Homie MQTT Device
@@ -1239,6 +1261,7 @@ class Device:
         description_extras: Optional[dict] = None,
         mqtt_cfg: Optional[dict] = None,
         qos: int = EBUS_HOMIE_MQTT_QOS,
+        on_disconnect: Optional[Callable[[bool], None]] = None,
     ):
         # Root vs. child invariants — mutually exclusive
         if parent is not None and mqtt_cfg:
@@ -1258,6 +1281,11 @@ class Device:
         self.mqttc = None
         self._state = None
         self._qos = qos
+        # Optional consumer hook: called on the ROOT's MQTT (dis)connect. Only a
+        # root owns a client (children share it), so it fires on the root only.
+        # Contract is transport-neutral: on_disconnect(clean: bool), never a paho
+        # reason code (SDK-al5). Must be set before connect_broker() below.
+        self._on_disconnect = on_disconnect
         self._id = id
         self._name = name if name else id
         self._type = type
@@ -1947,6 +1975,17 @@ class Device:
         self.initial_broker_connection = False
         self.refresh_tree()
 
+    def _handle_disconnect(self, rc=None) -> None:
+        """Transport disconnect handler for the root's MQTT client.
+
+        Invoked by ebus-mqtt-client with paho's integer reason code. The code is
+        absorbed here (logged for diagnostics, never surfaced) and the consumer's
+        transport-neutral ``on_disconnect(clean: bool)`` hook is notified so a
+        paho type/value never leaks upward (SDK-al5).
+        """
+        logger.info(f"reason=deviceDisconnect,rootId={self._id},transportRc={rc}")
+        _dispatch_disconnect(self._on_disconnect, rc, f"device:{self._id}")
+
     def connect_broker(self) -> None:
         """
         Connect to MQTT broker using configuration from mqtt_cfg.
@@ -1984,6 +2023,7 @@ class Device:
                 client_id=self._id,
                 lwt=lwt,
                 on_connect_callback=partial(self.on_connect),
+                on_disconnect_callback=self._handle_disconnect,
             )
         except Exception:
             logger.exception(f"reason=deviceConnectBrokerFailed,id={self._id}")
@@ -2238,6 +2278,11 @@ class Controller:
         self._on_device_removed = None
         self._on_property_changed = None
         self._on_description_received = None
+        # Consumer disconnect hook (SDK-al5), set via set_on_disconnect_callback.
+        # Only effective when the controller OWNS its client (constructed from
+        # mqtt_cfg); a bring-your-own-client caller registers disconnect handling
+        # on its own client. Contract is transport-neutral: on_disconnect(clean).
+        self._on_disconnect = None
 
         # Connect to broker
         self._connect_broker()
@@ -2261,11 +2306,22 @@ class Controller:
                 mqtt_cfg=self._mqtt_cfg,
                 client_id=client_id,
                 on_connect_callback=partial(self._on_connect),
+                on_disconnect_callback=self._handle_disconnect,
             )
             self.mqttc.start(blocking=False)
             logger.info(f"reason=controllerConnected,clientID={client_id}")
         except Exception as e:
             logger.exception(f"reason=controllerConnectException,error={e}")
+
+    def _handle_disconnect(self, rc=None) -> None:
+        """Transport disconnect handler for the controller's owned MQTT client.
+
+        Invoked by ebus-mqtt-client with paho's integer reason code, which is
+        absorbed here (logged, never surfaced); the consumer's transport-neutral
+        ``on_disconnect(clean: bool)`` hook is notified (SDK-al5).
+        """
+        logger.info(f"reason=controllerDisconnect,transportRc={rc}")
+        _dispatch_disconnect(self._on_disconnect, rc, "controller")
 
     @property
     def qos(self) -> int:
@@ -2887,3 +2943,16 @@ class Controller:
     def set_on_description_received_callback(self, callback: Callable[[DiscoveredDevice], None]) -> None:
         """Set callback for when a device description is received"""
         self._on_description_received = callback
+
+    def set_on_disconnect_callback(self, callback: Callable[[bool], None]) -> None:
+        """Set callback for when the controller's MQTT connection drops (SDK-al5).
+
+        The callback receives a single ``clean: bool`` argument: True for an
+        orderly/expected disconnect (e.g. stop()), False for an unexpected drop.
+        The transport (paho) reason code is normalized to this boolean at the SDK
+        boundary and never surfaced, so no paho type/value leaks into consumers.
+        Best-effort (a callback exception is logged, not propagated). Effective
+        only when the controller owns its client (constructed from mqtt_cfg); a
+        bring-your-own-client caller registers disconnect handling on its client.
+        """
+        self._on_disconnect = callback
