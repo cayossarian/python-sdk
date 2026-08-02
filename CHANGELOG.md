@@ -4,6 +4,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `Property.set_format()`: a public setter for a property's Homie `$format`, so an adapter with a dynamic enum/range format (for example an EVSE whose advertised current range changes at runtime) no longer has to assign the private `_format`. `$format` lives in the device `$description`, so the change reaches the wire on the next `$description` republish; call it inside a `device.state_transition()` for the batched INIT->READY republish. Additive.
+
 ## [0.13.0] — 2026-08-01
 
 ### Added

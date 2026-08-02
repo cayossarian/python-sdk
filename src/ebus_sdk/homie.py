@@ -596,6 +596,19 @@ class Property:
         """
         return self._format
 
+    def set_format(self, new_format: Optional[str]) -> None:
+        """Set this property's ``$format`` (e.g. a dynamic enum/range that changes
+        at runtime, such as an EVSE's advertised current range).
+
+        ``$format`` lives inside the device ``$description``, so the change reaches
+        the wire on the next ``$description`` republish. Call this inside a
+        ``device.state_transition()`` so the batched INIT->READY republish carries
+        it; the SDK does not republish a single property attribute on its own. This
+        is the public replacement for adapters that previously assigned the private
+        ``_format`` because no setter existed (SDK-6do.2).
+        """
+        self._format = new_format
+
     def coerced_value(self) -> Optional[str]:
         """
         Returns the property's value (potentially rounded), as a string.

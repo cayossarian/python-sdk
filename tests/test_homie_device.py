@@ -199,6 +199,15 @@ class TestHomieProperty:
         assert p.settable() is True
         assert p.get_set_callback() is not None
 
+    def test_set_format_updates_format_and_description(self):
+        p = Property(id="mode", datatype=PropertyDatatype.ENUM, format="auto,manual")
+        assert p.format() == "auto,manual"
+        assert p.description()["format"] == "auto,manual"
+        # A dynamic format update (e.g. an EVSE's advertised current range changing).
+        p.set_format("auto,manual,off")
+        assert p.format() == "auto,manual,off"
+        assert p.description()["format"] == "auto,manual,off"
+
     def test_set_callback_ignored_when_not_settable(self):
         cb = MagicMock()
         p = Property(id="temp", settable=False, set_callback=cb)
