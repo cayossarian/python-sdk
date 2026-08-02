@@ -12,6 +12,15 @@ Basic Homie device that publishes sensor data (temperature, humidity, air pressu
 ./simple-device --config /path/to/broker-cfg.json
 ```
 
+### simple-tree-device
+
+A parent/child device TREE over one MQTT connection: a root `distribution-enclosure` (`panel-1`) with circuit and BESS children and a MID grandchild, all sharing the root's single connection. It shows building the tree inside one `with root.state_transition():` (so the root publishes one INIT->READY for the whole tree, not one per child), a settable property on a child whose `/set` routes back over the shared connection, and the per-device topics each tree node publishes under. Reach for this over `simple-device` when you need to model a device that contains sub-devices. `--check` builds the tree, logs its structure, and exits (it works even with the broker down, since connect is asynchronous).
+
+```bash
+./simple-tree-device --config /path/to/broker-cfg.json
+./simple-tree-device --config /path/to/broker-cfg.json --check   # build + print + exit
+```
+
 ### simple-controller
 
 Controller that auto-discovers Homie devices and monitors property changes.

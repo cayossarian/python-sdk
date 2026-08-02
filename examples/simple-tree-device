@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""simple-tree-device: a parent/child device TREE over one MQTT connection.
+
+The device-role tree API lets a single adapter publish a whole tree of Homie
+devices that share ONE MQTT connection: a root device (which owns the connection
+and the Last Will) plus child and grandchild devices, each published under its
+own device id. This example builds a three-level tree:
+
+    panel-1                        (ROOT: distribution-enclosure, owns mqtt_cfg + LWT)
+    |-- circuit-1 .. circuit-3     (children, parent=panel-1)
+    |     '- circuit-3 also carries a SETTABLE relay (demonstrates /set routing)
+    '-- bess-1                     (child, parent=panel-1)
+          '-- mid-1                (GRANDCHILD, parent=bess-1)
+
+Each device publishes under its OWN id, for example:
+    ebus/5/panel-1/$state              ebus/5/panel-1/$description
+    ebus/5/circuit-1/$description      ebus/5/circuit-1/meter/active-power
+    ebus/5/bess-1/$description         ebus/5/mid-1/$description
+    ebus/5/circuit-3/switch/relay/set  (settable; routes to on_relay_set below)
+
+Two things worth noticing:
+  * Only the ROOT takes `mqtt_cfg`. A child takes `parent=<device>` and borrows
+    the root's single connection; passing both is an error. The root's client
+    must be started before children attach.
+  * Building every child inside one `with panel.state_transition():` block makes
+    the ROOT publish exactly one INIT->READY cycle for the whole tree instead of
+    one per child. A `/set` on circuit-3 routes back over the same shared
+    connection to on_relay_set.
+
+Run against a broker:
+    ./examples/simple-tree-device --config /path/to/broker-cfg.json
+    # then, in another shell:
+    mosquitto_sub -t 'ebus/5/#' -v
+
+Build the tree and exit without waiting (handy to eyeball the structure; works
+even with the broker down, since connect is asynchronous):
+    ./examples/simple-tree-device --config /path/to/broker-cfg.json --check
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import threading
+
+from ebus_sdk import homie
+
+
+def load_broker_config(config_file: str) -> dict:
+    with open(config_file, "r") as f:
+        return json.load(f)
+
+
+def build_tree(mqtt_cfg: dict, logger: logging.Logger) -> homie.Device:
+    """Construct and publish the panel/circuit/bess/mid device tree."""
+    # 1) The ROOT owns the MQTT connection and the Last Will. Only the root takes
+    #    mqtt_cfg; its client must be up before any child attaches.
+    panel = homie.Device(
+        id="panel-1",
+        name="Example Distribution Enclosure",
+        type="energy.ebus.device.distribution-enclosure",
+        mqtt_cfg=mqtt_cfg,
+    )
+    panel.start_mqtt_client()
+
+    # Inbound /set for the settable relay arrives here over the SHARED root
+    # connection (children do not open their own connections).
+    def on_relay_set(payload) -> None:
+        logger.info(f"reason=relaySetReceived,payload={payload!r}")
+
+    # 2) Build the whole tree inside ONE root state_transition, so the ROOT
+    #    publishes exactly one INIT->READY cycle rather than one per child.
+    with panel.state_transition():
+        for i in range(1, 4):
+            circuit = homie.Device(
+                id=f"circuit-{i}",
+                name=f"Circuit {i}",
+                type="energy.ebus.device.circuit",
+                parent=panel,  # child: shares the root connection, no mqtt_cfg
+            )
+            meter = circuit.add_node_from_dict({"id": "meter", "name": "Meter", "type": "energy.ebus.capability.meter"})
+            meter.add_property_from_dict(
+                {
+                    "id": "active-power",
+                    "name": "Active Power",
+                    "datatype": homie.PropertyDatatype.FLOAT,
+                    "unit": homie.Unit.WATT,
+                    "value": 0.0,
+                }
+            )
+            # circuit-3 also carries a settable relay to demonstrate /set routing
+            # back through the shared connection.
+            if i == 3:
+                switch = circuit.add_node_from_dict(
+                    {"id": "switch", "name": "Switch", "type": "energy.ebus.capability.switch"}
+                )
+                switch.add_property_from_dict(
+                    {
+                        "id": "relay",
+                        "name": "Relay",
+                        "datatype": homie.PropertyDatatype.BOOLEAN,
+                        "settable": True,
+                        "value": False,
+                        "set_callback": on_relay_set,
+                    }
+                )
+
+        # A BESS child, with a MID grandchild hanging off it (the third level).
+        bess = homie.Device(id="bess-1", name="Battery", type="energy.ebus.device.bess", parent=panel)
+        homie.Device(
+            id="mid-1",
+            name="Microgrid Interconnect Device",
+            type="energy.ebus.device.mid",
+            parent=bess,
+        )
+
+    logger.info(f"reason=treeBuilt,root={panel.id()},children={panel.children_ids()}")
+    return panel
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Example parent/child Homie device tree")
+    parser.add_argument("-c", "--config", help="Path to broker config JSON (or set EBUS_BROKER_CFG env var)")
+    parser.add_argument("--check", action="store_true", help="Build the tree, log its structure, and exit")
+    args = parser.parse_args()
+
+    config_file = args.config or os.environ.get("EBUS_BROKER_CFG")
+    if not config_file:
+        print("Error: no broker config. Use --config <file> or set EBUS_BROKER_CFG.")
+        sys.exit(1)
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logger = logging.getLogger("simple-tree-device")
+
+    mqtt_cfg = load_broker_config(config_file)
+    build_tree(mqtt_cfg, logger)
+
+    if args.check:
+        logger.info("check mode: tree built, exiting")
+        return
+
+    logger.info("tree is live; Ctrl-C to exit. Watch it with: mosquitto_sub -t 'ebus/5/#' -v")
+    threading.Event().wait()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        logging.exception(e)
