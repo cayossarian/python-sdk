@@ -30,4 +30,7 @@ setup(
     version=version,
     package_dir={"": "src"},
     packages=find_packages(where="src"),
+    # PEP 561 marker (SDK-61t.4). setuptools 59.5.0 (Yocto kirkstone) drops a
+    # bare marker unless it is listed here; mirrors pyproject package-data.
+    package_data={"ebus_sdk": ["py.typed"]},
 )

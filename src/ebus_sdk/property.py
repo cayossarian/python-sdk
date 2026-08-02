@@ -208,7 +208,7 @@ class Property:
 class BulkUpdateContext:
     """Context manager for bulk updates to GroupedPropertyDict"""
 
-    def __init__(self, grouped_dict):
+    def __init__(self, grouped_dict: "GroupedPropertyDict") -> None:
         self.grouped_dict = grouped_dict
         self.pending_events = []
 
@@ -244,7 +244,7 @@ class PropertyDict:
     the thread-safety of the underlying Property method calls.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = Lock()
         self._properties = {}
 
@@ -397,7 +397,7 @@ class GroupedPropertyDict:
         the thread-safety of the underlying PropertyDict and Property method calls.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = RLock()  # RLock needed because _fire_event is called while holding lock
         self._groups = {}
         self._observers = {}

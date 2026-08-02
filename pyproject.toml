@@ -58,6 +58,12 @@ version = {attr = "ebus_sdk.__version__"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Ship the PEP 561 marker so consumers' type checkers use the SDK's inline types
+# (SDK-61t.4). The legacy setup.py shim carries the same package_data for the
+# Yocto/kirkstone build path, where a bare marker is otherwise dropped.
+[tool.setuptools.package-data]
+ebus_sdk = ["py.typed"]
+
 [tool.ruff]
 line-length = 120
 
