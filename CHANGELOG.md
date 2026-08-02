@@ -4,9 +4,20 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-02
+
 ### Added
 
 - `Property.set_format()`: a public setter for a property's Homie `$format`, so an adapter with a dynamic enum/range format (for example an EVSE whose advertised current range changes at runtime) no longer has to assign the private `_format`. `$format` lives in the device `$description`, so the change reaches the wire on the next `$description` republish; call it inside a `device.state_transition()` for the batched INIT->READY republish. Additive.
+- `examples/simple-tree-device`: a runnable parent/child/grandchild device tree over one MQTT connection (a root distribution-enclosure with circuit and BESS children and a MID grandchild). It demonstrates building the whole tree inside one `with root.state_transition():` so the root publishes a single INIT->READY, a settable property on a child whose `/set` routes back over the shared connection, and a `--check` mode that builds the tree and exits (works with the broker down, via the asynchronous connect).
+
+### Fixed
+
+- `Device(mqtt_cfg=None)` (the documented default argument) no longer raises `AttributeError`. Constructing a root `Device` without a config now builds a TRANSPORT-FREE tree: it composes `$description`, resolves ids and topics, and holds property values, but never opens a socket, which is useful for tests, schema derivation, and hosts that publish through their own client. `mqtt_cfg={}` is unchanged (still connects on `ebus-mqtt-client`'s defaults); only `None`, which previously raised, changes behaviour, so no working caller is affected. The child-attach guard is qualified to still fire for a configured root that has lost its client. Thanks to @cayossarian (GH #9 / #10).
+
+### Removed
+
+- `examples/simple-controller`: removed. It did flat, tree-unaware wildcard discovery, which is the dead model now that eBus devices are parent/child trees: it listed a panel and its children as unrelated devices and reported a child's own stale state instead of the effective state under a lost root. A tree-aware replacement that reclaims the `simple-controller` name is planned as a follow-up.
 
 ## [0.13.0] — 2026-08-01
 

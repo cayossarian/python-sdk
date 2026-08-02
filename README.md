@@ -50,6 +50,10 @@ temp.set_value(23.5)
 
 Constructing a `Device` never blocks or fails just because the broker is momentarily unreachable (startup, restart, a network blip). The connection is opened asynchronously on the network loop that `start_mqtt_client()` starts, and retried with backoff until the broker appears; when it connects, the SDK publishes the device's complete state (`$state`, `$description`, nodes, and property values), so a device built against a down broker comes up fully published rather than half-published. You can publish before the link is up (values are retained and re-published on connect), or gate on `device.is_connected()` if you must not publish until connected. A genuinely bad configuration (a malformed `mqtt_cfg` or an unreadable TLS certificate) still fails fast: it raises out of the `Device(...)` constructor rather than leaving a silent, dead publisher.
 
+#### Transport-free construction
+
+A `Device` tree can also be built with no transport at all: pass `mqtt_cfg=None` (the default) and the tree composes `$description`, resolves ids and topics, and holds property values without opening a socket: useful for tests, for deriving the wire schema, and for a host that publishes through its own MQTT client. `mqtt_cfg={}` still connects on the transport's defaults; only `None` skips the connection. Children attach to a transport-free root exactly as they do to a connected one.
+
 #### Clearing a value vs. an empty-string value
 
 Homie 5 distinguishes two things that both look "empty" on the wire, and the SDK handles each automatically:
