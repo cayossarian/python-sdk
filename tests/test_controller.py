@@ -1303,3 +1303,66 @@ class TestControllerBYOTransport:
             client.start.assert_called_once()  # SDK starts an owned client
             ctrl.stop()
             client.stop.assert_called_once()  # and stops it
+
+
+class TestMqttTransportProtocol:
+    """The injection point is typed by what the SDK calls on an injected client (#8)."""
+
+    def test_mqtt_client_satisfies_the_protocol(self):
+        """The concrete client must keep satisfying the widened annotation."""
+        from ebus_mqtt_client import MqttClient as ConcreteClient
+
+        from ebus_sdk import MqttTransport
+
+        assert issubclass(ConcreteClient, MqttTransport)
+
+    def test_protocol_is_exported_from_the_package_root(self):
+        """A consumer who cannot name the type gets nothing from the widening."""
+        import ebus_sdk
+
+        assert "MqttTransport" in ebus_sdk.__all__
+        assert ebus_sdk.MqttTransport is not None
+
+    def test_a_three_member_client_is_a_valid_transport(self):
+        """publish / subscribe / unsubscribe is the whole injected-client contract.
+
+        Deliberately implements nothing else — no start, stop, is_connected, is_running
+        or publish_and_flush — because the SDK never calls those on an injected client.
+        """
+        from ebus_sdk import MqttTransport
+
+        class Minimal:
+            def publish(self, topic, data, qos=1, retain=False):
+                return None
+
+            def subscribe(self, sub, param, qos=1):
+                return None
+
+            def unsubscribe(self, sub):
+                return True
+
+        client = Minimal()
+        assert isinstance(client, MqttTransport)
+
+        ctrl = Controller(mqttc=client)
+        ctrl.start_discovery()
+        ctrl.stop()  # must not reach start()/stop() on a client that has neither
+
+    def test_owned_client_handle_is_none_when_injected(self):
+        """`_owned_client` is what makes 'never stopped' structural rather than promised."""
+        fake = MagicMock()
+        ctrl = Controller(mqttc=fake)
+        assert ctrl._owned_client is None
+        ctrl.stop()
+        fake.stop.assert_not_called()
+
+    def test_owned_client_handle_is_set_and_cleared_for_an_sdk_built_client(self):
+        with patch("ebus_sdk.homie.MqttClient.from_config") as mock_from_config:
+            client = MagicMock()
+            client.sub_callbacks = {}
+            mock_from_config.return_value = client
+            ctrl = Controller(mqtt_cfg={"host": "x"})
+            assert ctrl._owned_client is client
+            ctrl.stop()
+            client.stop.assert_called_once()
+            assert ctrl._owned_client is None
