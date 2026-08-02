@@ -59,7 +59,7 @@ Discovers eBus devices and walks them as a TREE (roots then descendants), the cu
 
 ### simple-span-controller
 
-SPAN Panel controller with mDNS discovery. Connects via MQTTS and monitors power flow properties.
+Connects to a live SPAN panel via mDNS + MQTTS and determines whether the home is islanded from the grid, watching the MID child's `grid` capability (`islanding-state` / `grid-state` / `grid-forming-entity`) plus the enclosure's `power-flows`. Targets the current parent/child data model (the legacy flat `core/dominant-power-source` is retired).
 
 Requires the `mdns` extra:
 
