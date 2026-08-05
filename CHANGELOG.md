@@ -4,6 +4,8 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-08-05
+
 ### Fixed
 
 - `ebus_default_override`: the customizer's state-of-charge entry was keyed `battery`, which is not an eBus capability and never has been. State of charge lives in `energy.ebus.capability.soc`, so a conformant device typing its node that way resolved to the key `soc`, missed the table, and reached Home Assistant with neither a `device_class` nor a `state_class` on its SoC: precisely the ambiguous bare percent the entry exists to resolve. The entry is re-keyed `soc` and its property ids corrected to the ones the capability actually defines. `state-of-charge`, `power` and `temperature` are dropped: none is a property of any eBus capability, a battery's electrical power is `meter/active-power` (already covered), and eBus does not model pack temperature. Note this removes the `battery` key rather than aliasing it, so a publisher that copied the old example's non-conformant `energy.ebus.capability.battery` node type should move to `soc`. Thanks to [@cayossarian](https://github.com/cayossarian). ([#27](https://github.com/electrification-bus/python-sdk/issues/27))
@@ -12,6 +14,7 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ### Changed
 
+- Dependency floor: `ebus-mqtt-client>=0.4.0` (was `>=0.3.0`), and the bring-your-own-transport section of the README now documents the loop-native path it adds. The injection seam answers WHICH connection a producer publishes through, but paho's network loop still has to be pumped somewhere, and by default that is a background thread: the exact thing the seam's motivating host (Home Assistant) forbids. 0.4.0's `MqttClient.asyncio_driver()` pumps that loop on the caller's asyncio loop instead, so the README can now point at an answer where it previously only named the problem. The SDK does not import the driver and needs nothing from 0.4.0 at runtime (the full test suite passes unchanged against it); the floor rises because a consumer following the documented guidance needs it present. The driver module loads lazily and imports only the standard library plus paho, so a thread-mode consumer or a constrained build never loads it.
 - `.ebus-spec.json` re-synced against the specification (HEAD `922b9f8`), which it had drifted 49 commits behind: framework 0.5 -> 0.7, `capabilities/info` 0.1 -> 0.2, `capabilities/meter` 0.1 -> 0.2, `devices/utility-meter` 0.3 -> 0.6, `registries/capability-types` 0.11 -> 0.19, `registries/device-types` 0.4 -> 0.5. The `supports` list is unchanged: no framework feature was added or removed across 0.5 -> 0.7. Two substantive corrections beyond the version numbers: `grid`, `status`, `demand` and `power-quality` are now pinned directly, because utility-meter 0.6 split them out of the utility-meter data model into standalone catalogs and the old `notes` rationale ("covered by pinning utility-meter 0.3") therefore no longer held; and `soc` 0.1 is pinned, the customizer having first-class knowledge of it. None of the version bumps required SDK code changes: each is additive-MAY or prose. `device-types` 0.5 is upstream catching up to its own data models: auditing this repo against the catalogs turned up four device-type identifiers the specification's data models declare but its registry had never listed, including `energy.ebus.device.utility-meter`, the type this repo's reference publisher emits. Reported by [@cayossarian](https://github.com/cayossarian), who ran the specification's `drift-report.py` against us. ([#27](https://github.com/electrification-bus/python-sdk/issues/27))
 
 ### Added
@@ -67,6 +70,7 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 ### Fixed
 
 - `Device(mqtt_cfg=None)` (the documented default argument) no longer raises `AttributeError`. Constructing a root `Device` without a config now builds a TRANSPORT-FREE tree: it composes `$description`, resolves ids and topics, and holds property values, but never opens a socket, which is useful for tests, schema derivation, and hosts that publish through their own client. `mqtt_cfg={}` is unchanged (still connects on `ebus-mqtt-client`'s defaults); only `None`, which previously raised, changes behaviour, so no working caller is affected. The child-attach guard is qualified to still fire for a configured root that has lost its client. Thanks to [@cayossarian](https://github.com/cayossarian) (GH [#9](https://github.com/electrification-bus/python-sdk/issues/9) / [#10](https://github.com/electrification-bus/python-sdk/issues/10)).
+
 ## [0.13.0] — 2026-08-01
 
 ### Added
@@ -95,6 +99,7 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 - Resilient broker connect, end to end. A root `Device` constructed while the broker is briefly unavailable (startup, restart, network blip) now comes up correctly instead of as a silent, dead-but-"running" publisher. This required two coordinated fixes. (1) The MQTT transport (`ebus-mqtt-client` 0.1.8) now connects asynchronously (`connect_async`) so construction no longer raises `ConnectionRefusedError` on a down broker and no longer leaves a never-connecting client; the link is established (and retried with backoff) on the network loop when the broker appears. (2) `Device.on_connect()` now republishes the **complete** tree — every device's `$description`, nodes, property values, and `$state` — on the **initial** connect, not just node values. Previously the initial connect published only node values and assumed `$state`/`$description` had already been published by the construction-time state transition; with an asynchronous connect that assumption fails when the broker was down at construction, so a device could appear on the bus half-published (nodes present, `$state`/`$description` missing) — which a Homie consumer sees as broken. The initial-connect republish is now as complete as the reconnect republish (`refresh_tree`, idempotent, cascading to any children constructed before the first connect). The redundant republish on a broker that was already up at construction is harmless (retained, idempotent).
 - `Device.connect_broker()` no longer swallows a genuine construction fault into a silent `mqttc=None`. Now that a down broker no longer raises (it is handled by the asynchronous connect), any exception from constructing the MQTT client signals a real fault — a malformed `mqtt_cfg` or an unreadable TLS certificate — and is **re-raised** out of `Device(...)` so it surfaces immediately, rather than yielding a dead publisher whose every publish is a no-op. Consumers that prefer the previous swallow-and-continue behavior can wrap construction in `try`/`except`. A correctly-configured device is unaffected (construction never raised for it before and still does not).
+
 ## [0.11.0] — 2026-07-11
 
 ### Added
@@ -259,9 +264,16 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 ## [0.1.2] — 2025
 
-Initial public release on PyPI. See `git log v0.1.2` for the surface that shipped.
+Initial public release on PyPI. It predates this repo's tagging convention (the earliest tag is `v0.1.4`), so there is no `v0.1.2` tag to read; the published artifact on PyPI is the record of the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.18.0
+[0.17.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.17.0
+[0.16.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.16.0
+[0.15.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.15.0
+[0.14.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.14.0
+[0.13.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.13.0
+[0.12.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.12.0
 [0.11.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.11.0
 [0.10.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.10.0
 [0.9.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.9.0
@@ -276,4 +288,4 @@ Initial public release on PyPI. See `git log v0.1.2` for the surface that shippe
 [0.2.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.2.0
 [0.1.7]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.1.7
-[0.1.2]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.1.2
+[0.1.2]: https://pypi.org/project/ebus-sdk/0.1.2/
