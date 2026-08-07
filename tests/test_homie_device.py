@@ -1736,9 +1736,7 @@ class TestDeviceRefreshTree:
         topics = [c[0][0] for c in mock_client.publish.call_args_list]
         root_state = [i for i, t in enumerate(topics) if t.endswith("/panel-1/$state")]
         child_states = [
-            i
-            for i, t in enumerate(topics)
-            if t.endswith("/circuit-a/$state") or t.endswith("/circuit-b/$state")
+            i for i, t in enumerate(topics) if t.endswith("/circuit-a/$state") or t.endswith("/circuit-b/$state")
         ]
 
         assert root_state, f"root published no $state in {topics}"
@@ -1792,6 +1790,14 @@ class TestDeviceRefreshTree:
         topics = [c[0][0] for c in mock_client.publish.call_args_list]
         assert any("/mid-1/$description" in t for t in topics)
         assert any("/mid-1/$state" in t for t in topics)
+
+        # State-after-children is recursive, not a root special case: the
+        # intermediate device must also announce after its own child. Without
+        # this, a fix that reordered only the root passes the whole suite.
+        bess_state = [i for i, t in enumerate(topics) if t.endswith("/bess-1/$state")]
+        mid_state = [i for i, t in enumerate(topics) if t.endswith("/mid-1/$state")]
+        assert bess_state and mid_state
+        assert min(bess_state) > max(mid_state), f"intermediate device announced $state before its child: {topics}"
 
     def test_on_connect_reconnect_cascades(self, mock_paho):
         """On reconnect, root.on_connect() walks the whole tree."""

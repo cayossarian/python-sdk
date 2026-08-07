@@ -1983,16 +1983,6 @@ class Device:
         """
         return StateTransitionContext(self)
 
-    def _publish_self(self) -> None:
-        """
-        Republish this single device's description, nodes, and state.
-        No INIT/READY flap — used by reconnect cascade where we just want
-        the broker to see what's already true.
-        """
-        self.publish_description(republish=True)
-        self.publish_nodes()
-        self.publish_state()
-
     def refresh_tree(self) -> None:
         """
         Republish this device and every descendant (description, nodes,
@@ -2009,15 +1999,16 @@ class Device:
             f"nodeCount={len(self._nodes)},childCount={len(self._children)}"
         )
         # Description and nodes first, then descendants, then this device's own
-        # state. A device's $description names its children, so announcing
-        # ``ready`` before those children have published anything advertises a
-        # tree that is not yet there: a controller that gates on the root's
-        # state — which Homie 5 invites it to do — proceeds against children
-        # whose own $description has not arrived. Publishing state after the
-        # recursion makes ``ready`` mean what it says at every level, and the
-        # root go ready last.
-        #
-        # The set of messages is unchanged; only their order is.
+        # state. A device's $description names its children, so publishing
+        # ``ready`` ahead of the recursion advertises a tree that is not on the
+        # broker yet; this order also matches the add-child path, where a child
+        # publishes itself fully before its parent re-announces (__init__).
+        # It matters most after an ungraceful drop: the LWT leaves the root
+        # retained as ``lost``, Homie 5 makes every child of a ``lost`` root
+        # ``lost`` too, so holding this device's state until the recursion
+        # finishes makes the refresh one atomic commit, flipped by one publish.
+        # This narrows a producer-side window; it is NOT a guarantee a consumer
+        # may build on (see doc/consuming-a-homie-tree.md). Message set unchanged.
         self.publish_description(republish=True)
         self.publish_nodes()
         # Snapshot — main thread may construct child devices (which append
