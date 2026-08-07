@@ -4,6 +4,10 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- `Device.refresh_tree()` published a device's own `$state` before recursing to its children, so the root announced `ready` while the children its `$description` names had published nothing. `on_connect` calls `refresh_tree()` for SDK-owned clients on both the initial connect and every reconnect, so this was the normal path rather than an edge case: a controller gating on the root's `$state` — which Homie 5 invites — proceeded against a tree whose children had not yet described themselves, and on a broker restart a previously-healthy consumer re-read a root claiming `ready` with nothing under it. Description and nodes are now published first, then descendants, then this device's own state, so `ready` means what it says at every level and the root goes ready last. The set of messages is unchanged; only their order is (verified on a 37-device tree: 74 publishes and 74 unique topics before and after, identical topic sets). ([#31](https://github.com/electrification-bus/python-sdk/issues/31))
+
 ## [0.18.0] — 2026-08-05
 
 ### Fixed

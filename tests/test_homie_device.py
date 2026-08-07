@@ -1713,6 +1713,46 @@ class TestDeviceRefreshTree:
             )
             assert any(f"/{device_id}/$state" in t for t in topics), f"missing $state for {device_id} in {topics}"
 
+    def test_refresh_tree_publishes_own_state_after_its_children(self, mock_paho):
+        """A device must not announce ``ready`` before the children it names.
+
+        ``$description`` lists this device's children, so publishing
+        ``$state=ready`` before those children have published anything
+        advertises a tree that is not yet on the broker. Homie 5 invites a
+        controller to gate on the root's state, and on reconnect
+        (``on_connect`` -> ``refresh_tree``) such a controller would proceed
+        against children whose own ``$description`` had not arrived.
+
+        Order only: the set of messages is the same either way, which is what
+        ``test_refresh_tree_cascades_to_children`` already pins.
+        """
+        root, mock_client = _make_device(mock_paho, device_id="panel-1")
+        Device(id="circuit-a", parent=root)
+        Device(id="circuit-b", parent=root)
+        mock_client.publish.reset_mock()
+
+        root.refresh_tree()
+
+        topics = [c[0][0] for c in mock_client.publish.call_args_list]
+        root_state = [i for i, t in enumerate(topics) if t.endswith("/panel-1/$state")]
+        child_states = [
+            i
+            for i, t in enumerate(topics)
+            if t.endswith("/circuit-a/$state") or t.endswith("/circuit-b/$state")
+        ]
+
+        assert root_state, f"root published no $state in {topics}"
+        assert len(child_states) == 2, f"expected both children to publish $state in {topics}"
+        assert min(root_state) > max(child_states), (
+            "root announced $state before its children; a controller gating on the root "
+            f"would see a tree whose children have not published. topics={topics}"
+        )
+
+        # The root's own description still leads, so the tree's shape is on the
+        # broker before anything claims to be ready.
+        root_description = [i for i, t in enumerate(topics) if t.endswith("/panel-1/$description")]
+        assert root_description and min(root_description) < min(child_states)
+
     def test_refresh_tree_snapshots_against_concurrent_child_add(self, mock_paho):
         """SDK-e3k: refresh_tree() must snapshot self._children so a child
         appended by the main thread mid-cascade isn't pulled into the current

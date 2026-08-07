@@ -2008,11 +2008,23 @@ class Device:
             f"reason=deviceRefreshTree,deviceId={self._id},"
             f"nodeCount={len(self._nodes)},childCount={len(self._children)}"
         )
-        self._publish_self()
+        # Description and nodes first, then descendants, then this device's own
+        # state. A device's $description names its children, so announcing
+        # ``ready`` before those children have published anything advertises a
+        # tree that is not yet there: a controller that gates on the root's
+        # state — which Homie 5 invites it to do — proceeds against children
+        # whose own $description has not arrived. Publishing state after the
+        # recursion makes ``ready`` mean what it says at every level, and the
+        # root go ready last.
+        #
+        # The set of messages is unchanged; only their order is.
+        self.publish_description(republish=True)
+        self.publish_nodes()
         # Snapshot — main thread may construct child devices (which append
         # to self._children) while this runs on the MQTT loop thread.
         for child in list(self._children):
             child.refresh_tree()
+        self.publish_state()
 
     def publish(self, attribute: str = "", value: Optional[Any] = None) -> None:
         """
