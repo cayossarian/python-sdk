@@ -4,6 +4,18 @@ All notable changes to `ebus-sdk` are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-08-13
+
+### Changed
+
+- CI: the `pytest` and `ruff` jobs, and the publish workflow's test gate, now carry `timeout-minutes: 5`. The suite runs in about two seconds, so anything near that bound is a hang rather than slowness. This matters from this release on: `homie.Property` now takes a lock, and a lock regression deadlocks whichever thread reaches it (making it non-reentrant deadlocks the main thread at the first `set_value`, which is most of the suite). Unbounded, GitHub would let that run to its six-hour default instead of reporting a failure, and a hung job reports nothing useful. The publish and release jobs are deliberately left unbounded, since a slow PyPI upload is not the same kind of event.
+
+### Fixed
+
+- `GroupedPropertyDict`'s active bulk-update context is now per-thread. `BulkUpdateContext.__enter__` and `__exit__` mutated a shared `_bulk_mode`/`_bulk_context` pair with no lock held, while every other accessor on the class (including the observer dispatch) took its `RLock`, which made the omission look accidental rather than deliberate. Two threads entering bulk contexts on the same dict therefore corrupted each other: entering displaced the other's context, and whichever exited first cleared bulk mode for both. No events were lost, since `__exit__` fires the context object's own list, but they were misattributed and fragmented: some of one thread's changes landed in the other's batch, and everything after the early exit fired individually instead of batching. For a Homie publisher that fragmentation is the real cost, because each structural event that escapes the batch triggers its own `$description` republish and a `$state` transition, so one logical change produces extra republishes and visible state flapping. Thread-local rather than serializing on the existing lock, since a bulk context can be held across I/O and one thread should not block for the duration of another's batch. A nested `bulk_update()` on the same thread now restores the enclosing context on exit instead of ending it, so the outer batch resumes rather than leaking its remainder as individual events. Two threads batching independently was always the reasonable reading; now it is the actual behavior. Reported with a precise account of which consequences do and do not follow. ([#55](https://github.com/electrification-bus/python-sdk/issues/55))
+
+- `Property` now serializes "compute the payload, publish it, record what was published" under a per-property reentrant lock, so the publish-on-change memo can never disagree with the last write that actually reached the wire. Two threads reach that sequence: the application thread via `set_value()`, and the MQTT loop thread via `on_connect` → `refresh_tree(force=True)`. Interleaved, the loop thread could publish the old payload, the application thread could then publish and memoize the new one, and the loop thread could finally overwrite the memo with the older payload it had sent first. The property then believed the broker held a value it did not, and the 0.20.0 gate suppressed the very publish that would have corrected it, so the wrong retained value persisted until the next genuine change or reconnect. The window is narrow (it needs a reconnect refresh concurrent with a value update) and the class has never had a lock, so `_value` and `_ever_published` were already exposed to it in kind; 0.20.0 made the consequence durable rather than transient, which is what moves this from a latent wart to a fix. The lock is reentrant because `set_value()` calls `publish_value()` calls `clear_value()`, each taking it; a plain `Lock` self-deadlocks on the commonest call in the SDK. It is per-property, so it never serializes a tree walk, and no path holds two, so there is no ordering hazard. It is deliberately held across the transport's `publish()`: releasing earlier reopens the window it exists to close. No API change. ([#50](https://github.com/electrification-bus/python-sdk/issues/50))
+
 ## [0.20.0] — 2026-08-12
 
 ### Added
@@ -314,7 +326,8 @@ The 0.2.0 release introduces first-class parent/child device trees on both the d
 
 Initial public release on PyPI. It predates this repo's tagging convention (the earliest tag is `v0.1.4`), so there is no `v0.1.2` tag to read; the published artifact on PyPI is the record of the surface that shipped.
 
-[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/electrification-bus/python-sdk/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.20.1
 [0.20.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.20.0
 [0.19.0]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.19.0
 [0.18.1]: https://github.com/electrification-bus/python-sdk/releases/tag/v0.18.1
